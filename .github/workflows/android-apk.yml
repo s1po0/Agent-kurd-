@@ -14,7 +14,7 @@ on:
       - '.github/workflows/android-apk.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: apk-${{ github.ref }}
@@ -67,3 +67,17 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish APK download release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="android-v0.1.0"
+          mkdir -p release
+          cp android/app/build/outputs/apk/debug/app-debug.apk release/Kurd-Agent.apk
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "$GITHUB_SHA" \
+              --title "Kurd Agent Android APK v0.1.0" \
+              --notes "Installable debug-signed Android APK. The app does not bundle model weights or an Android inference engine; configure an Ollama-compatible model service in Settings."
+          fi
+          gh release upload "$tag" release/Kurd-Agent.apk --clobber
