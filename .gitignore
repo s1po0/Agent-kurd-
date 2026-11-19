@@ -7,3 +7,9 @@ local.properties
 android/.gradle/
 android/**/build/
 android/app/src/main/assets/www/
+.kurd-agent-signing.*/
+KurdAgent-android-signing-secrets.txt
+KurdAgent-three-secrets.txt
+KURD_AGENT_KEYSTORE_BASE64.txt
+KURD_AGENT_KEYSTORE_PASSWORD.txt
+KURD_AGENT_KEY_ALIAS.txt
