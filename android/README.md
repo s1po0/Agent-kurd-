@@ -20,7 +20,7 @@ A GitHub Actions workflow builds the APK and publishes it as the `Kurd-Agent-And
 
 ## Upgrade-safe signing
 
-For Android to install future APKs over an existing installation, each build must use the same signing keystore and a higher version code. The workflow supports a persistent PKCS#12 keystore through these **repository Actions secrets**: `KURD_AGENT_KEYSTORE_BASE64`, `KURD_AGENT_KEYSTORE_PASSWORD`, and `KURD_AGENT_KEY_ALIAS`. Without them, GitHub's temporary debug key is used, so the APK will not be upgrade-compatible between CI runs. Never commit the private keystore or its password to this repository. Keep a secure backup of the signing key: losing it means users must uninstall before switching keys.
+For Android to install future APKs over an existing installation, each build must use the same signing keystore and a higher version code. The workflow supports a persistent PKCS#12 keystore through these **repository Actions secrets**: `KURD_AGENT_KEYSTORE_BASE64`, `KURD_AGENT_KEYSTORE_PASSWORD`, and `KURD_AGENT_KEY_ALIAS`. Without them, GitHub's temporary debug key is used, so the APK will not be upgrade-compatible between CI runs. Never commit the private keystore or its password to this repository. Keep a secure backup of the signing key: losing it means users must uninstall before switching keys. After adding the three secrets, any Android-source push triggers a new signed build and updates the downloadable release.
 
 ## Model engine note
 
