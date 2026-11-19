@@ -20,7 +20,7 @@ val copyKurdAgentWeb by tasks.registering(Copy::class) {
 
 android {
     namespace = "com.kurdagent.app"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.kurdagent.app"
