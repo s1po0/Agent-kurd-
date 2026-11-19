@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   apk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out source
         uses: actions/checkout@v6
@@ -35,9 +35,9 @@ jobs:
 
       - name: Verify Android SDK
         run: |
-          echo "ANDROID_HOME=${ANDROID_HOME:-not-set}"
-          command -v sdkmanager
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+          test -d "$ANDROID_HOME/platforms/android-35"
+          test -d "$ANDROID_HOME/build-tools/35.0.0"
+          echo "Using preinstalled SDK at $ANDROID_HOME"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
