@@ -42,11 +42,23 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.10.2'
 
       - name: Build installable debug APK
         working-directory: android
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
+        shell: bash
+        run: |
+          set +e
+          gradle --no-daemon --stacktrace --console=plain :app:assembleDebug 2>&1 | tee "$RUNNER_TEMP/gradle-build.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            echo "### Gradle build failure details" >> "$GITHUB_STEP_SUMMARY"
+            grep -E '(^e: |error:|FAILURE:|What went wrong:|Caused by:|Could not |Execution failed)' "$RUNNER_TEMP/gradle-build.log" | tail -n 20 | while IFS= read -r line; do
+              echo "::error title=Gradle build::$line"
+              echo "- $line" >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
+          exit "$result"
 
       - name: Publish APK artifact
         uses: actions/upload-artifact@v4
