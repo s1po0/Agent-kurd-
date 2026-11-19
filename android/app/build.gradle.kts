@@ -24,7 +24,7 @@ android {
 
     defaultConfig {
         applicationId = "com.kurdagent.app"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 28
         val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionCode = buildNumber
@@ -57,6 +57,11 @@ android {
 
 chaquopy {
     defaultConfig { version = "3.13" }
+}
+
+dependencies {
+    implementation(files("libs/llama-kotlin-0.3.0.aar"))
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
 }
 
 tasks.named("preBuild").configure { dependsOn(copyKurdAgentWeb) }

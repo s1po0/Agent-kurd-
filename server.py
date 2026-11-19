@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
+import shutil
 import secrets
 import threading
 import urllib.error
@@ -20,6 +22,7 @@ SECRETS_PATH = DATA_DIR / "secrets.json"
 LOCK = threading.Lock()
 PULL_JOBS = {}
 DEFAULTS = {"provider": "ollama", "base_url": "http://127.0.0.1:11434", "model": "", "temperature": 0.7}
+HF_REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,120}")
 AGENT_TOOLS = [
     {"type": "function", "function": {"name": "github_list_repositories", "description": "List the connected user's most recently updated GitHub repositories.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "github_search_repositories", "description": "Search repositories on GitHub by keywords. This is read-only.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "A short GitHub repository search query"}}, "required": ["query"]}}},
@@ -98,16 +101,52 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
+        if path == "/api/local-ai/status":
+            cfg = read_json(CONFIG_PATH, {})
+            local = cfg.get("local_model") or {}
+            model_path = DATA_DIR / "models" / str(local.get("local_filename", "")) if local.get("local_filename") else None
+            hf_token = secrets_data().get("hf_token")
+            self.send_json(200, {"provider": cfg.get("provider", "ollama"), "has_hf_token": bool(hf_token),
+                                 "model_ready": bool(model_path and model_path.is_file()),
+                                 "repo": local.get("repo", ""), "filename": local.get("filename", ""),
+                                 "model_path": str(model_path) if model_path and model_path.is_file() else ""})
+            return
+        if path == "/api/local-ai/files":
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            repo = (query.get("repo", [""])[0]).strip()
+            if not HF_REPO_RE.fullmatch(repo):
+                self.send_json(400, {"error": "Enter a Hugging Face repository in owner/name format."})
+                return
+            try:
+                url = "https://huggingface.co/api/models/" + urllib.parse.quote(repo, safe="/") + "/tree/main?recursive=true&expand=true"
+                headers = {"User-Agent": "KurdAgent/0.1"}
+                if secrets_data().get("hf_token"):
+                    headers["Authorization"] = "Bearer " + secrets_data()["hf_token"]
+                files = request_json(url, headers=headers, timeout=30)
+                gguf = [{"path": item.get("path"), "size": item.get("size", 0)} for item in files
+                        if isinstance(item, dict) and str(item.get("path", "")).lower().endswith(".gguf")]
+                self.send_json(200, {"files": gguf[:100]})
+            except Exception as exc:
+                self.send_json(502, {"error": f"Could not list model files. For gated/private repositories, connect a Hugging Face read token. ({exc})"})
+            return
         if path == "/api/status":
             cfg = settings()
             github = bool(secrets_data().get("github_token"))
-            try:
-                models = self.get_models(cfg)
-                available, model_error = True, None
-            except Exception as exc:
-                models, available, model_error = [], False, str(exc)
             saved_cfg = read_json(CONFIG_PATH, {})
-            self.send_json(200, {"provider": cfg["provider"], "base_url": cfg["base_url"], "model": cfg["model"],
+            if cfg["provider"] == "android-local":
+                local = saved_cfg.get("local_model") or {}
+                model_path = DATA_DIR / "models" / str(local.get("local_filename", "")) if local.get("local_filename") else None
+                ready = bool(model_path and model_path.is_file())
+                models, available, model_error = [], ready, None if ready else "Download a GGUF model in Settings first."
+                selected_model = local.get("filename", "")
+            else:
+                try:
+                    models = self.get_models(cfg)
+                    available, model_error = True, None
+                except Exception as exc:
+                    models, available, model_error = [], False, str(exc)
+                selected_model = cfg["model"]
+            self.send_json(200, {"provider": cfg["provider"], "base_url": cfg["base_url"], "model": selected_model,
                                  "temperature": cfg.get("temperature", 0.7), "has_api_key": bool(saved_cfg.get("api_key")),
                                  "available": available, "model_error": model_error, "models": models,
                                  "github_connected": github})
@@ -164,6 +203,10 @@ class Handler(BaseHTTPRequestHandler):
         self.serve_static(path)
 
     def get_models(self, cfg):
+        if cfg["provider"] == "android-local":
+            local = read_json(CONFIG_PATH, {}).get("local_model") or {}
+            model_path = DATA_DIR / "models" / str(local.get("local_filename", "")) if local.get("local_filename") else None
+            return [str(local.get("filename"))] if model_path and model_path.is_file() else []
         base = safe_url(cfg["base_url"])
         if cfg["provider"] == "ollama":
             data = request_json(base + "/api/tags", timeout=8)
@@ -291,6 +334,82 @@ class Handler(BaseHTTPRequestHandler):
                 if job_id in PULL_JOBS:
                     PULL_JOBS[job_id].update({"state": "error", "error": str(exc), "status": "Download failed"})
 
+    def start_local_model_download(self, repo, filename):
+        if not HF_REPO_RE.fullmatch(repo):
+            raise ValueError("Enter a Hugging Face repository in owner/name format.")
+        if not filename or len(filename) > 500 or filename.startswith("/") or ".." in filename.split("/") or not filename.lower().endswith(".gguf"):
+            raise ValueError("Choose a valid GGUF file from the repository file list.")
+        job_id = secrets.token_urlsafe(9)
+        local_name = hashlib.sha256((repo + "/" + filename).encode()).hexdigest()[:20] + ".gguf"
+        with LOCK:
+            active = sum(1 for job in PULL_JOBS.values() if job.get("state") == "running")
+            if active >= 2:
+                raise ValueError("Two model downloads are already running. Wait for one to finish.")
+            PULL_JOBS[job_id] = {"id": job_id, "model": filename, "state": "running", "status": "Starting model download", "percent": 0}
+        thread = threading.Thread(target=self.pull_local_model, args=(job_id, repo, filename, local_name), daemon=True)
+        thread.start()
+        return job_id, local_name
+
+    @staticmethod
+    def pull_local_model(job_id, repo, filename, local_name):
+        temp_path = DATA_DIR / "models" / (local_name + ".part")
+        final_path = DATA_DIR / "models" / local_name
+        try:
+            model_dir = DATA_DIR / "models"
+            model_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            api_url = "https://huggingface.co/api/models/" + urllib.parse.quote(repo, safe="/") + "/tree/main?recursive=true&expand=true"
+            headers = {"User-Agent": "KurdAgent/0.1"}
+            token = secrets_data().get("hf_token")
+            if token:
+                headers["Authorization"] = "Bearer " + token
+            with urllib.request.urlopen(urllib.request.Request(api_url, headers=headers), timeout=30) as response:
+                available = json.loads(response.read())
+            entry = next((item for item in available if isinstance(item, dict) and item.get("path") == filename and filename.lower().endswith(".gguf")), None)
+            if not entry:
+                raise ValueError("That GGUF file was not found in the repository. Refresh the file list.")
+            size = int(entry.get("size") or 0)
+            free = shutil.disk_usage(model_dir).free
+            if size and free < size + 128 * 1024 * 1024:
+                raise ValueError("Not enough free phone storage for this model and temporary download file.")
+            download_url = "https://huggingface.co/" + urllib.parse.quote(repo, safe="/") + "/resolve/main/" + urllib.parse.quote(filename, safe="/") + "?download=true"
+            request = urllib.request.Request(download_url, headers=headers)
+            transferred = 0
+            with urllib.request.urlopen(request, timeout=60) as response, temp_path.open("wb") as output:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    output.write(chunk)
+                    transferred += len(chunk)
+                    with LOCK:
+                        job = PULL_JOBS.get(job_id)
+                        if job:
+                            job["percent"] = min(99, round(transferred * 100 / size)) if size else 0
+                            job["status"] = f"Downloaded {transferred // (1024 * 1024)} MB"
+                output.flush()
+                os.fsync(output.fileno())
+            if size and transferred != size:
+                raise IOError("Model download ended before the full file arrived. Check the connection and retry.")
+            temp_path.replace(final_path)
+            cfg = read_json(CONFIG_PATH, {})
+            cfg["provider"] = "android-local"
+            cfg["local_model"] = {"repo": repo, "filename": filename, "local_filename": local_name}
+            write_json_private(CONFIG_PATH, cfg)
+            # Keep storage bounded: retain the previous model until this replacement is fully downloaded.
+            for old_model in model_dir.glob("*.gguf"):
+                if old_model.name != local_name:
+                    old_model.unlink(missing_ok=True)
+            with LOCK:
+                PULL_JOBS[job_id].update({"state": "complete", "percent": 100, "status": "GGUF saved on this device", "local_filename": local_name})
+        except Exception as exc:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            with LOCK:
+                if job_id in PULL_JOBS:
+                    PULL_JOBS[job_id].update({"state": "error", "error": str(exc), "status": "Download failed"})
+
     def same_origin(self):
         origin = self.headers.get("Origin")
         if not origin:
@@ -308,10 +427,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/settings":
                 old = read_json(CONFIG_PATH, {})
                 provider = data.get("provider", "ollama")
-                if provider not in ("ollama", "openai-compatible"):
+                if provider not in ("ollama", "openai-compatible", "android-local"):
                     raise ValueError("Unsupported model provider")
                 cfg = {"provider": provider, "base_url": safe_url(data.get("base_url", DEFAULTS["base_url"])),
                        "model": str(data.get("model", ""))[:200], "temperature": max(0, min(2, float(data.get("temperature", 0.7))))}
+                if old.get("local_model"):
+                    cfg["local_model"] = old["local_model"]
                 # Empty key means keep the previous one; explicit clear_key removes it.
                 key = str(data.get("api_key", ""))
                 if key:
@@ -320,6 +441,24 @@ class Handler(BaseHTTPRequestHandler):
                     cfg["api_key"] = old["api_key"]
                 write_json_private(CONFIG_PATH, cfg)
                 self.send_json(200, {"ok": True, "settings": settings(), "has_api_key": bool(cfg.get("api_key"))})
+                return
+            if path == "/api/huggingface/connect":
+                token = str(data.get("token", "")).strip()
+                if not token or len(token) > 1000:
+                    raise ValueError("Enter a Hugging Face user access token.")
+                user = request_json("https://huggingface.co/api/whoami-v2", headers={
+                    "Authorization": f"Bearer {token}", "User-Agent": "KurdAgent/0.1"}, timeout=20)
+                with LOCK:
+                    saved = secrets_data()
+                    saved["hf_token"] = token
+                    write_json_private(SECRETS_PATH, saved)
+                self.send_json(200, {"ok": True, "username": user.get("name") or user.get("fullname") or "Hugging Face user"})
+                return
+            if path == "/api/local-ai/download":
+                repo = str(data.get("repo", "")).strip()
+                filename = str(data.get("filename", "")).strip()
+                job_id, local_name = self.start_local_model_download(repo, filename)
+                self.send_json(202, {"job_id": job_id, "local_filename": local_name})
                 return
             if path == "/api/chat":
                 cfg = DEFAULTS | read_json(CONFIG_PATH, {})
@@ -390,11 +529,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self.same_origin():
             self.send_json(403, {"error": "Cross-origin requests are not allowed"})
             return
-        if urllib.parse.urlparse(self.path).path != "/api/github/connect":
+        path = urllib.parse.urlparse(self.path).path
+        if path not in ("/api/github/connect", "/api/huggingface/connect"):
             self.send_json(404, {"error": "Unknown API endpoint"})
             return
         saved = secrets_data()
-        saved.pop("github_token", None)
+        saved.pop("github_token" if path == "/api/github/connect" else "hf_token", None)
         write_json_private(SECRETS_PATH, saved)
         self.send_json(200, {"ok": True})
 

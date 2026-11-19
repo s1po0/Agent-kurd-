@@ -23,6 +23,7 @@ import java.io.File
 class MainActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var progress: ProgressBar
+    private var localAiBridge: LocalAiBridge? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,6 +66,9 @@ class MainActivity : Activity() {
         setContentView(root)
 
         try {
+            val modelDirectory = File(filesDir, "kurd-agent/data/models").apply { mkdirs() }
+            localAiBridge = LocalAiBridge(webView, modelDirectory)
+            webView.addJavascriptInterface(localAiBridge!!, "KurdLocalAI")
             copyWebAssets()
             if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
             Python.getInstance().getModule("android_server").callAttr("start_server", filesDir.absolutePath)
@@ -107,6 +111,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        localAiBridge?.close()
         if (this::webView.isInitialized) webView.destroy()
         super.onDestroy()
     }

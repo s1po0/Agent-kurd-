@@ -2,6 +2,22 @@ const $ = (selector) => document.querySelector(selector);
 const pages = {chat: $('#chatPage'), connections: $('#connectionsPage'), settings: $('#settingsPage')};
 let chatHistory = [];
 let toastTimer;
+let localCallSequence = 0;
+const localCalls = new Map();
+window.onKurdLocalAiResult = (id, payload) => {
+  const done = localCalls.get(id); if (!done) return;
+  localCalls.delete(id);
+  try { const result = JSON.parse(payload); result.ok ? done.resolve(result) : done.reject(new Error(result.error || 'Local inference failed')); }
+  catch (error) { done.reject(error); }
+};
+function callLocalAi(method, value) {
+  if (!window.KurdLocalAI || typeof window.KurdLocalAI[method] !== 'function') return Promise.reject(new Error('On-device AI is available in the Android app only.'));
+  const id = `local_${++localCallSequence}`;
+  return new Promise((resolve, reject) => {
+    localCalls.set(id, {resolve, reject});
+    try { window.KurdLocalAI[method](value, id); } catch (error) { localCalls.delete(id); reject(error); }
+  });
+}
 const defaultSystem = 'You are Kurd Agent, a helpful assistant. Respond in the same language as the user. The user may write in Sorani Kurdish; respond naturally in Sorani Kurdish when appropriate. Be clear, accurate, and honest about uncertainty. When read-only GitHub tools are available and a question depends on the connected account or repositories, use those tools instead of guessing. Never claim to have changed or written repository data.';
 
 function toast(message, error = false) {
@@ -35,8 +51,17 @@ async function sendPrompt(text) {
   chatHistory.push({role:'user', content:clean});
   const pending = addMessage('assistant', 'وەڵامەکە ئامادە دەکەم...', true); $('#sendButton').disabled = true;
   try {
-    const response = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({messages:[{role:'system', content:defaultSystem}, ...chatHistory]})});
-    const result = await response.json(); if (!response.ok) throw new Error(result.error || 'هەڵەیەک ڕوویدا');
+    let result;
+    if ($('#provider').value === 'android-local') {
+      const stateResponse = await fetch('/api/local-ai/status'); const state = await stateResponse.json();
+      if (!stateResponse.ok || !state.model_ready) throw new Error('یەکەم جار مۆدێلی GGUF لە ڕێکخستن دابەزێنە.');
+      await callLocalAi('loadModel', state.model_path);
+      const localHistory = chatHistory.slice(-5).map(message => ({...message, content:message.content.slice(-500)}));
+      result = await callLocalAi('chat', JSON.stringify({messages:[{role:'system',content:defaultSystem}, ...localHistory], temperature:Number($('#temperature').value)}));
+    } else {
+      const response = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({messages:[{role:'system', content:defaultSystem}, ...chatHistory]})});
+      result = await response.json(); if (!response.ok) throw new Error(result.error || 'هەڵەیەک ڕوویدا');
+    }
     pending.remove(); const reply = result.reply || 'وەڵامێک نەگەڕایەوە.'; chatHistory.push({role:'assistant', content:reply});
     const toolsNote = result.tools_used?.length ? '\n\n🧰 ئامرازی خوێندنەوەی GitHub بەکارهاتووە' : ''; addMessage('assistant', reply + toolsNote);
   } catch (error) {
@@ -61,6 +86,7 @@ async function loadSettings() {
     $('#keySaved').hidden = !data.has_api_key; $('#clearApiKey').hidden = !data.has_api_key;
     $('#apiKey').dataset.clear = 'false';
     populateModels(data.models || [], data.model || '');
+    await refreshLocalAiStatus();
   } catch { /* status check below will show service state */ }
 }
 function populateModels(models, selected = '') {
@@ -70,6 +96,86 @@ function populateModels(models, selected = '') {
   if (selected && !models.includes(selected)) {const opt=document.createElement('option'); opt.value=selected; opt.textContent=selected; select.append(opt);}
   select.value = selected;
 }
+function formatModelSize(bytes) {
+  const size = Number(bytes || 0); if (!size) return 'قەبارە نادیار';
+  return size >= 1024 ** 3 ? `${(size / 1024 ** 3).toFixed(2)} GB` : `${(size / 1024 ** 2).toFixed(0)} MB`;
+}
+async function refreshLocalAiStatus() {
+  try {
+    const response = await fetch('/api/local-ai/status'); const state = await response.json();
+    $('#hfTokenSaved').hidden = !state.has_hf_token; $('#disconnectHf').hidden = !state.has_hf_token;
+    $('#localHfRepo').value ||= state.repo || '';
+    $('#localModelState').textContent = state.model_ready ? `ئامادەیە: ${state.filename}` : 'مۆدێل ئامادە نییە؛ GGUF دابەزێنە';
+    if (state.model_ready && state.filename) {
+      const select = $('#localHfFile');
+      if (![...select.options].some(option => option.value === state.filename)) {
+        const option = document.createElement('option'); option.value = state.filename; option.textContent = state.filename; select.append(option);
+      }
+      select.value = state.filename;
+    }
+    return state;
+  } catch { return null; }
+}
+$('#connectHf').addEventListener('click', async () => {
+  const token = $('#hfToken').value.trim(); if (!token) { toast('تۆکنی Hugging Face بنووسە', true); return; }
+  const button = $('#connectHf'); button.disabled = true; button.textContent = 'پشکنین...';
+  try {
+    const response = await fetch('/api/huggingface/connect', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token})});
+    const data = await response.json(); if (!response.ok) throw new Error(data.error || 'پەیوەندی بە Hugging Face سەرکەوتوو نەبوو');
+    $('#hfToken').value = ''; await refreshLocalAiStatus(); toast(`بە سەرکەوتوویی پەیوەست بوو: ${data.username}`);
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; button.textContent = 'پەیوەستکردن'; }
+});
+$('#disconnectHf').addEventListener('click', async () => {
+  try { const response = await fetch('/api/huggingface/connect', {method:'DELETE'}); if (!response.ok) throw new Error(); await refreshLocalAiStatus(); toast('تۆکنی Hugging Face سڕایەوە'); }
+  catch { toast('سڕینەوەی تۆکن سەرکەوتوو نەبوو', true); }
+});
+$('#loadHfFiles').addEventListener('click', async () => {
+  const repo = $('#localHfRepo').value.trim(); if (!repo) { toast('ناوی ڕێپۆ بنووسە', true); return; }
+  const button = $('#loadHfFiles'); button.disabled = true; button.textContent = 'بار دەکرێت...';
+  try {
+    const response = await fetch('/api/local-ai/files?repo=' + encodeURIComponent(repo)); const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'فایلەکانی GGUF نەدۆزرایەوە');
+    const select = $('#localHfFile'); select.replaceChildren();
+    if (!data.files.length) { select.add(new Option('هیچ فایلی GGUF نییە', '')); throw new Error('ئەم ڕێپۆیە فایلی GGUF ـی گونجاوی نییە.'); }
+    data.files.forEach(file => select.add(new Option(`${file.path} · ${formatModelSize(file.size)}`, file.path)));
+    updateLocalFileSize(); toast(`${data.files.length} فایلی GGUF دۆزرایەوە`);
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; button.innerHTML = 'فایلەکان <span>↻</span>'; }
+});
+function updateLocalFileSize() {
+  const text = $('#localHfFile').selectedOptions[0]?.textContent || '';
+  $('#localHfFileSize').textContent = text.includes(' · ') ? `— ${text.split(' · ').at(-1)}` : '';
+}
+$('#localHfFile').addEventListener('change', updateLocalFileSize);
+$('#downloadLocalModel').addEventListener('click', async () => {
+  const repo = $('#localHfRepo').value.trim(), filename = $('#localHfFile').value;
+  if (!repo || !filename) { toast('ڕێپۆ و فایلی GGUF هەڵبژێرە', true); return; }
+  const button = $('#downloadLocalModel'), progress = $('#localDownloadProgress'); button.disabled = true; button.textContent = 'دادەبەزێت...'; progress.hidden = false;
+  $('#localDownloadStatus').textContent = 'پەیوەندی بە Hugging Face...'; $('#localDownloadPercent').textContent = '0%'; $('#localDownloadBar').style.width = '0%';
+  try {
+    const response = await fetch('/api/local-ai/download', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({repo, filename})});
+    const data = await response.json(); if (!response.ok) throw new Error(data.error || 'داگرتنی مۆدێل دەستپێ نەکرا');
+    let job;
+    while (true) {
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const statusResponse = await fetch('/api/models/pull?id=' + encodeURIComponent(data.job_id)); const status = await statusResponse.json();
+      if (!statusResponse.ok) throw new Error(status.error || 'دۆخی داگرتن بەردەست نییە');
+      job = status.job; $('#localDownloadStatus').textContent = job.status || 'مۆدێل دادەبەزێت...';
+      $('#localDownloadPercent').textContent = `${job.percent || 0}%`; $('#localDownloadBar').style.width = `${job.percent || 0}%`;
+      if (job.state === 'error') throw new Error(job.error || 'داگرتنی مۆدێل سەرکەوتوو نەبوو');
+      if (job.state === 'complete') break;
+    }
+    const state = await refreshLocalAiStatus();
+    if (!state?.model_ready) throw new Error('فایلی GGUF لەسەر ئامێر پاشەکەوت نەکرا.');
+    $('#provider').value = 'android-local';
+    await saveModelSettings('');
+    await callLocalAi('loadModel', state.model_path);
+    $('#localDownloadStatus').textContent = 'مۆدێل لەسەر ئامێر لۆد کرا؛ inferencing ئۆفلاینە';
+    await refreshStatus(); toast('مۆدێل لۆد کرا و بۆ چاتی ئۆفلاین ئامادەیە');
+  } catch (error) { $('#localDownloadStatus').textContent = error.message; toast(error.message, true); }
+  finally { button.disabled = false; button.innerHTML = 'داگرتن بۆ ئەم ئامێرە <span>↓</span>'; }
+});
 $('#refreshModels').addEventListener('click', async () => {
   const button = $('#refreshModels'); button.disabled=true; button.textContent='...';
   try {

@@ -71,9 +71,9 @@
 
       <section class="page" id="settingsPage">
         <div class="settings-wrap">
-          <div class="page-intro"><span class="section-kicker">مۆدێلی خۆت، یاساکانی خۆت</span><h1>ڕێکخستنی مۆدێل</h1><p>بۆ کارکردنی ئۆفلاین، Ollama بەکاربهێنە. یان هەر خزمەتگوزارییەکی OpenAI-compatible دیاری بکە.</p></div>
+          <div class="page-intro"><span class="section-kicker">مۆدێلی خۆت، یاساکانی خۆت</span><h1>ڕێکخستنی مۆدێل</h1><p>سێ هەڵبژاردە: inference ـی ناوخۆیی Android، Ollama، یان خزمەتگوزاریی OpenAI-compatible.</p></div>
           <div class="settings-card"><div class="card-heading"><div class="heading-icon">✳</div><div><h2>سەرچاوەی مۆدێل</h2><p>هەڵبژاردەی بنەڕەتی: Ollama لەسەر ئامێری خۆت</p></div></div>
-            <label class="field-label" for="provider">جۆری سەرچاوە</label><select id="provider"><option value="ollama">Ollama · خۆجێیی و ئۆفلاین</option><option value="openai-compatible">OpenAI-compatible · ناوخۆیی یان cloud</option></select>
+            <label class="field-label" for="provider">جۆری سەرچاوە</label><select id="provider"><option value="android-local">Android Local AI · GGUF و بێ ئینتەرنێت</option><option value="ollama">Ollama · سێرڤەری خۆجێیی</option><option value="openai-compatible">OpenAI-compatible · ناوخۆیی یان cloud</option></select>
             <label class="field-label" for="baseUrl">ناونیشانی API</label><input id="baseUrl" type="url" spellcheck="false" placeholder="http://127.0.0.1:11434">
             <div class="field-label-row"><label class="field-label" for="modelSelect">مۆدێل</label><button class="text-button refresh-models" id="refreshModels">↻ پشکنینی نوێ</button></div>
             <select id="modelSelect"><option value="">سەرەتا پەیوەندییەکە بپشکنە</option></select>
@@ -81,7 +81,16 @@
             <label class="field-label" for="temperature">پلەی داهێنان <span id="temperatureValue">0.7</span></label><input id="temperature" type="range" min="0" max="2" step="0.1" value="0.7">
             <div class="settings-actions"><span class="save-message" id="settingsMessage"></span><button class="primary-button" id="saveSettings">پاشەکەوتکردنی ڕێکخستن <span>↗</span></button></div>
           </div>
-          <div class="settings-card hf-card"><div class="card-heading"><div class="heading-icon hf-heading-icon">HF</div><div><h2>مۆدێلی ئۆفلاین لە Hugging Face</h2><p>GGUF لە Hugging Face بدۆزەرەوە و ڕاستەوخۆ بۆ Ollama دایبەزێنە.</p></div></div>
+          <div class="settings-card local-ai-card">
+            <div class="card-heading"><div class="heading-icon hf-heading-icon">HF</div><div><h2>Hugging Face و AI ـی ناوخۆیی</h2><p>مۆدێلی GGUF دابەزێنە و لەسەر خودی تەلەفۆنەکەت inference بکە.</p></div></div>
+            <div class="hf-auth-row"><div class="hf-auth-fields"><label class="field-label" for="hfToken">Hugging Face access token <span class="optional">(بۆ گەشتی گشتی پێویست نییە)</span></label><input id="hfToken" type="password" autocomplete="new-password" placeholder="hf_..." spellcheck="false"><small class="field-note">تەنها بۆ مۆدێلی gated/private؛ بە شێوەی نهێنی لە ناو storage ـی تایبەتی ئەپ هەڵدەگیرێت.</small></div><div class="hf-auth-actions"><span class="key-saved" id="hfTokenSaved" hidden>پەیوەستە</span><button class="primary-button" id="connectHf">پەیوەستکردن</button><button class="text-button danger-text" id="disconnectHf" hidden>جیاکردنەوە</button></div></div>
+            <label class="field-label" for="localHfRepo">ناوی ڕێپۆ (owner/model)</label><div class="hf-search-row"><input id="localHfRepo" type="text" spellcheck="false" placeholder="bartowski/Qwen2.5-1.5B-Instruct-GGUF"><button class="primary-button" id="loadHfFiles">فایلەکان <span>↻</span></button></div>
+            <label class="field-label" for="localHfFile">فایلی GGUF <span id="localHfFileSize" class="optional"></span></label><select id="localHfFile"><option value="">سەرەتا ڕێپۆکە بپشکنە</option></select>
+            <div class="hf-search-row"><button class="primary-button" id="downloadLocalModel">داگرتن بۆ ئەم ئامێرە <span>↓</span></button><span class="field-note" id="localModelState">هیچ مۆدێلێک لۆد نەکراوە</span></div>
+            <div class="download-progress" id="localDownloadProgress" hidden><div class="progress-meta"><span id="localDownloadStatus">ئامادەکاری...</span><span id="localDownloadPercent">0%</span></div><div class="progress-track"><span id="localDownloadBar"></span></div></div>
+            <small class="field-note">داگرتن ئینتەرنێت و شوێنی پاشەکەوتکردنی زۆر دەوێت. پاش داگرتن، چات بە llama.cpp لەسەر CPU ـی تەلەفۆن ئەنجام دەدرێت و ئینتەرنێت پێویست نییە. بۆ دەستپێک مۆدێلی Q4 ـی بچووک هەڵبژێرە؛ قەبارە و RAM ـی بەکارهاتوو پێشتر بپشکنە. هەندێک مۆدێلی private/gated تۆکنی read پێویست دەکات.</small>
+          </div>
+          <div class="settings-card hf-card"><div class="card-heading"><div class="heading-icon hf-heading-icon">HF</div><div><h2>مۆدێلی Ollama لە Hugging Face</h2><p>GGUF لە Hugging Face بدۆزەرەوە و ڕاستەوخۆ بۆ Ollama دایبەزێنە.</p></div></div>
             <label class="field-label" for="hfSearch">گەڕان بە ناوی مۆدێل یان بەرهەمهێنەر</label><div class="hf-search-row"><input id="hfSearch" type="search" placeholder="Qwen 2.5 1.5B, Gemma 3, Llama 3.2..."><button class="primary-button" id="searchHf">گەڕان <span>⌕</span></button></div>
             <div class="hf-results" id="hfResults"></div>
             <label class="field-label" for="hfRepo">ڕێپۆی هەڵبژێردراوی Hugging Face</label><input class="hf-model-input" id="hfRepo" type="text" spellcheck="false" placeholder="bartowski/Qwen2.5-1.5B-Instruct-GGUF">
@@ -89,7 +98,7 @@
             <div class="download-progress" id="downloadProgress" hidden><div class="progress-meta"><span id="downloadStatus">ئامادەکاری...</span><span id="downloadPercent">0%</span></div><div class="progress-track"><span id="downloadBar"></span></div></div>
             <small class="field-note">گەڕان و دابەزاندن ئینتەرنێت دەوێت؛ پاش دابەزاندن، inference لەسەر مۆدێلی local و ئۆفلاینە. قەبارە و مۆڵەتی هەر مۆدێلێک جیاوازە؛ پێش بەکارهێنان مۆڵەتەکەی بپشکنە. GGUF ـی گشتی پێویستە.</small>
           </div>
-          <div class="offline-note"><span>◈</span><p><strong>بۆ تەواو ئۆفلاین بوون:</strong> Ollama بەکاربهێنە. مۆدێلەکە یەکەم جار لە Hugging Face یان Ollama دابەزێنە؛ پاشان دەتوانیت ئینتەرنێت پچڕێنیت. Hugging Face بە تەنها model hosting ـە، بۆیە Ollama inference ـەکە local ئەنجام دەدات.</p></div>
+          <div class="offline-note"><span>◈</span><p><strong>بۆ ئۆفلاین inference ـی ڕاستەوخۆ:</strong> سەرچاوەی Android Local AI هەڵبژێرە و مۆدێلی GGUF دابەزێنە. داگرتن و سەرپشکنینی token ئینتەرنێت دەوێت؛ دوای تەواوبوونی داگرتن، تەنها inference لەسەر ئامێرەکە ئەنجام دەدرێت. Hugging Face مۆدێل پێشکەش دەکات، بەڵام خۆی inference ناکات.</p></div>
         </div>
       </section>
       <div class="toast" id="toast" role="status"></div>

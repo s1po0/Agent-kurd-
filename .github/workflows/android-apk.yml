@@ -39,6 +39,12 @@ jobs:
           test -d "$ANDROID_HOME/build-tools/35.0.0"
           echo "Using preinstalled SDK at $ANDROID_HOME"
 
+      - name: Download and verify on-device inference engine
+        run: |
+          mkdir -p android/app/libs
+          curl --fail --location --retry 3 https://github.com/ThalzeronLabs/llama-kotlin/releases/download/v0.3.0/llama-kotlin-0.3.0.aar --output android/app/libs/llama-kotlin-0.3.0.aar
+          echo "5a4af6eeaef31d580adbfb1914b117aff5ff3da79fff4012f70d3c3e4b456d16  android/app/libs/llama-kotlin-0.3.0.aar" | sha256sum --check
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -103,6 +109,7 @@ jobs:
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --target "$GITHUB_SHA" \
               --title "Kurd Agent Android APK v0.1.0" \
-              --notes "Installable debug-signed Android APK. The app does not bundle model weights or an Android inference engine; configure an Ollama-compatible model service in Settings."
+              --notes "Installable debug-signed Android APK. Includes llama.cpp-based on-device GGUF inference; model weights are not bundled. Download a model while online in Settings, then use Android Local AI offline. Hugging Face access tokens are optional for public models and required only for gated/private downloads."
           fi
           gh release upload "$tag" release/Kurd-Agent.apk --clobber
+          gh release edit "$tag" --notes "Installable Android APK. Includes llama.cpp-based on-device GGUF inference; model weights are not bundled. Download a model while online in Settings, then use Android Local AI offline. Hugging Face tokens are optional for public models and needed only for gated/private downloads."
