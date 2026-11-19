@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.kurd-agent/
+.env
+.gradle/
+local.properties
+android/.gradle/
+android/**/build/
+android/app/src/main/assets/www/

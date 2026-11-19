@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ckb" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0e14">
+  <meta name="description" content="یارمەتی‌دەرێکی AI ـی تایبەتی، خۆجێیی و کوردی.">
+  <title>Kurd Agent — ئەجێنتی کورد</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#chat" aria-label="Kurd Agent">
+        <span class="brand-mark"><span></span><span></span><span></span></span>
+        <span><strong>KURD<span class="brand-accent">·</span>AI</strong><small>ئەجێنتی تایبەتی تۆ</small></span>
+      </a>
+      <button class="new-chat" id="newChat"><span class="plus">＋</span> گفتوگۆی نوێ <kbd>⌘ K</kbd></button>
+      <div class="nav-label">مێنوو</div>
+      <nav class="nav">
+        <button class="nav-item active" data-page="chat"><span class="nav-icon">◉</span><span>گفتوگۆ</span></button>
+        <button class="nav-item" data-page="connections"><span class="nav-icon">⌘</span><span>پەیوەندییەکان</span><span class="nav-count" id="connectionCount">٠</span></button>
+        <button class="nav-item" data-page="settings"><span class="nav-icon">⚙</span><span>ڕێکخستن</span></button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="local-card"><span class="secure-icon">◈</span><div><strong>نهێنی لە دەستی تۆدایە</strong><small>داتاکانت لەسەر ئامێرەکەت دەمێننەوە</small></div></div>
+        <div class="profile"><div class="avatar">ک</div><div><strong>بەکارهێنەری خۆجێیی</strong><small>ئۆفلاین ـ یەکەم</small></div><span class="online-dot"></span></div>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div class="breadcrumbs"><span>Kurd Agent</span><span class="crumb-sep">/</span><strong id="pageTitle">گفتوگۆ</strong></div>
+        <div class="top-actions"><div class="model-status" id="modelStatus"><span class="status-dot"></span><span>پشکنین...</span></div><button class="icon-button" id="themeButton" aria-label="ڕووناکی">◐</button></div>
+      </header>
+
+      <section class="page active" id="chatPage">
+        <div class="chat-layout">
+          <div class="chat-content">
+            <div class="welcome" id="welcome">
+              <div class="welcome-orb"><span class="orb-core"></span><span class="orb-ring ring-one"></span><span class="orb-ring ring-two"></span><i>✳</i></div>
+              <div class="eyebrow"><span class="eyebrow-line"></span> تایبەتەکەت، لە کۆنترۆڵی خۆتدا <span class="eyebrow-line"></span></div>
+              <h1>سڵاو، <span>چی دەتوانم بۆت بکەم؟</span></h1>
+              <p class="welcome-copy">پرسیارەکەت بنووسە. گفتوگۆکانت بە شێوەی بنەڕەتی لەسەر ئامێرەکەت دەمێننەوە.</p>
+              <div class="suggestions">
+                <button class="suggestion" data-prompt="یارمەتیم بدە بۆ پلاندانانی کارێکی نوێ."><span class="suggestion-icon lilac">✳</span><span><strong>پلانی کارێک دابنێ</strong><small>بە شێوەیەکی ڕێکخراو دەست پێ بکە</small></span><b>↖</b></button>
+                <button class="suggestion" data-prompt="ئەم بیرۆکەیە بۆم ڕوون بکەرەوە و نموونەی بۆ بهێنە."><span class="suggestion-icon mint">⌁</span><span><strong>بیرۆکەیەک ڕوون بکەرەوە</strong><small>وەڵامێکی سادە و نموونەدار</small></span><b>↖</b></button>
+                <button class="suggestion" data-prompt="یارمەتیم بدە کۆدەکەم تاقی بکەمەوە و هەڵەکان بدۆزمەوە."><span class="suggestion-icon amber">&lt;/&gt;</span><span><strong>لە کۆدەکەم یارمەتیم بدە</strong><small>بیرۆکە و چارەسەرەکان بپشکنە</small></span><b>↖</b></button>
+                <button class="suggestion" data-prompt="ئەمڕۆ چی فێر ببم؟ بابەتێکی سوودبەخش پێشنیار بکە."><span class="suggestion-icon blue">⌖</span><span><strong>شتێکی نوێ فێر ببە</strong><small>بابەتێک بۆ دەستپێکردن هەڵبژێرە</small><b>↖</b></span></button>
+              </div>
+            </div>
+            <div class="messages" id="messages" aria-live="polite"></div>
+            <form class="composer" id="chatForm">
+              <textarea id="promptInput" rows="1" placeholder="پەیامەکەت بنووسە..." aria-label="پەیامەکەت بنووسە"></textarea>
+              <div class="composer-bottom"><div class="composer-hint"><span class="local-mini">◈</span> گفتوگۆ خۆجێییە <span class="hint-divider">·</span> <span id="currentModel">مۆدێل هەڵنەبژێردراوە</span></div><button class="send-button" id="sendButton" type="submit" aria-label="بنێرە">↑</button></div>
+            </form>
+            <p class="fine-print">AI هەندێک جار هەڵە دەکات. زانیاریی گرنگ دووبارە بپشکنە.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="page" id="connectionsPage">
+        <div class="settings-wrap">
+          <div class="page-intro"><span class="section-kicker">گواستنەوەی ئاسان، کۆنترۆڵی تەواو</span><h1>پەیوەندییەکان</h1><p>خزمەتگوزارییەکانت بە ئەجێنتەکەتەوە ببەستەوە. تۆ دیاری دەکەیت چی پەیوەست بێت.</p></div>
+          <div class="privacy-banner"><span class="privacy-symbol">◈</span><div><strong>نهێنییەکان بە پارێزراوی هەڵدەگیرێن</strong><p>کلیلەکان تەنها لەسەر ئامێرەکەت لە فایلێکی تایبەتدا دەپارێزرێن؛ بۆ هیچ سێرڤەرێکی دەرەکی نانێردرێن.</p></div></div>
+          <div class="integration-card featured"><div class="integration-icon github-icon">⌘</div><div class="integration-main"><div class="integration-title"><h2>GitHub</h2><span class="badge" id="githubBadge">پەیوەست نییە</span></div><p>لە کاتی پەیوەستبوون، ئەجێنت دەتوانێت بە شێوەی خوێندنەوە ڕێپۆکان بپشکنێت و بگەڕێت؛ هیچ گۆڕانکارییەک ناکات.</p><div class="connect-row" id="githubConnectRow"><input id="githubToken" type="password" autocomplete="new-password" placeholder="GitHub personal access token" aria-label="GitHub access token"><button class="primary-button" id="connectGithub">پەیوەستکردن <span>↗</span></button></div><div class="github-connected" id="githubConnected" hidden><span>پەیوەستە</span><button class="text-button" id="loadRepos">ڕێپۆکان پیشان بدە</button><button class="text-button danger-text" id="disconnectGithub">جیاکردنەوە</button></div><div class="repo-list" id="repoList"></div><small class="field-note">Tokenێکی GitHub دروست بکە؛ تەنها دەسەڵاتی پێویست بدە (بۆ خوێندنەوە، repo).</small></div></div>
+          <div class="integration-card"><div class="integration-icon mcp-icon">⟡</div><div class="integration-main"><div class="integration-title"><h2>بەرنامەکانی تر <span class="beta-badge">MCP</span></h2><span class="badge neutral-badge">ڕێکخستنی داهاتوو</span></div><p>پەیوەندی لەگەڵ Notion، Google Drive، Gmail و زیاتر بە MCP. لەم وەشانەدا هێشتا چالاک نییە.</p><button class="text-button" id="mcpInfo">MCP چییە؟ <span>↗</span></button><div class="mcp-details" id="mcpDetails" hidden><p>MCP ستانداردێکە بۆ پەیوەستکردنی ئەجێنت بە ئامراز و خزمەتگوزارییەکان. دەتوانین لە قۆناغی داهاتوودا سێرڤەری MCP زیاد بکەین؛ لەم وەشانەدا GitHub ـی ڕاستەوخۆ و مۆدێلی خۆجێیی بەردەستن.</p></div></div></div>
+          <div class="integration-card coming-card"><div class="integration-icon terminal-icon">⌘_</div><div class="integration-main"><div class="integration-title"><h2>ئامرازە خۆجێییەکان</h2><span class="badge neutral-badge">بە زووترین</span></div><p>فایل و پرۆژەکانی ناو ئامێرەکەت بە شێوەی پارێزراو بەکاربهێنە.</p></div></div>
+        </div>
+      </section>
+
+      <section class="page" id="settingsPage">
+        <div class="settings-wrap">
+          <div class="page-intro"><span class="section-kicker">مۆدێلی خۆت، یاساکانی خۆت</span><h1>ڕێکخستنی مۆدێل</h1><p>بۆ کارکردنی ئۆفلاین، Ollama بەکاربهێنە. یان هەر خزمەتگوزارییەکی OpenAI-compatible دیاری بکە.</p></div>
+          <div class="settings-card"><div class="card-heading"><div class="heading-icon">✳</div><div><h2>سەرچاوەی مۆدێل</h2><p>هەڵبژاردەی بنەڕەتی: Ollama لەسەر ئامێری خۆت</p></div></div>
+            <label class="field-label" for="provider">جۆری سەرچاوە</label><select id="provider"><option value="ollama">Ollama · خۆجێیی و ئۆفلاین</option><option value="openai-compatible">OpenAI-compatible · ناوخۆیی یان cloud</option></select>
+            <label class="field-label" for="baseUrl">ناونیشانی API</label><input id="baseUrl" type="url" spellcheck="false" placeholder="http://127.0.0.1:11434">
+            <div class="field-label-row"><label class="field-label" for="modelSelect">مۆدێل</label><button class="text-button refresh-models" id="refreshModels">↻ پشکنینی نوێ</button></div>
+            <select id="modelSelect"><option value="">سەرەتا پەیوەندییەکە بپشکنە</option></select>
+            <div class="field-label-row"><label class="field-label" for="apiKey">API key <span class="optional">(ئیختیاری)</span></label><span><span class="key-saved" id="keySaved" hidden>کلیلێک پاشەکەوت کراوە</span> <button class="text-button danger-text" id="clearApiKey" type="button" hidden>سڕینەوە</button></span></div><input id="apiKey" type="password" autocomplete="new-password" placeholder="بۆ Ollama پێویست نییە"><small class="field-note">بۆ OpenAI-compatible ـی cloud؛ بە نهێنی لە ئامێرەکەت هەڵدەگیرێت.</small>
+            <label class="field-label" for="temperature">پلەی داهێنان <span id="temperatureValue">0.7</span></label><input id="temperature" type="range" min="0" max="2" step="0.1" value="0.7">
+            <div class="settings-actions"><span class="save-message" id="settingsMessage"></span><button class="primary-button" id="saveSettings">پاشەکەوتکردنی ڕێکخستن <span>↗</span></button></div>
+          </div>
+          <div class="settings-card hf-card"><div class="card-heading"><div class="heading-icon hf-heading-icon">HF</div><div><h2>مۆدێلی ئۆفلاین لە Hugging Face</h2><p>GGUF لە Hugging Face بدۆزەرەوە و ڕاستەوخۆ بۆ Ollama دایبەزێنە.</p></div></div>
+            <label class="field-label" for="hfSearch">گەڕان بە ناوی مۆدێل یان بەرهەمهێنەر</label><div class="hf-search-row"><input id="hfSearch" type="search" placeholder="Qwen 2.5 1.5B, Gemma 3, Llama 3.2..."><button class="primary-button" id="searchHf">گەڕان <span>⌕</span></button></div>
+            <div class="hf-results" id="hfResults"></div>
+            <label class="field-label" for="hfRepo">ڕێپۆی هەڵبژێردراوی Hugging Face</label><input class="hf-model-input" id="hfRepo" type="text" spellcheck="false" placeholder="bartowski/Qwen2.5-1.5B-Instruct-GGUF">
+            <div class="hf-download-row"><label class="field-label" for="hfQuant">جۆری فشاردان</label><select id="hfQuant"><option>Q4_K_M</option><option>Q5_K_M</option><option>Q8_0</option><option>Q4_0</option></select><button class="primary-button" id="downloadHf">دابەزاندن بۆ Ollama <span>↓</span></button></div>
+            <div class="download-progress" id="downloadProgress" hidden><div class="progress-meta"><span id="downloadStatus">ئامادەکاری...</span><span id="downloadPercent">0%</span></div><div class="progress-track"><span id="downloadBar"></span></div></div>
+            <small class="field-note">گەڕان و دابەزاندن ئینتەرنێت دەوێت؛ پاش دابەزاندن، inference لەسەر مۆدێلی local و ئۆفلاینە. قەبارە و مۆڵەتی هەر مۆدێلێک جیاوازە؛ پێش بەکارهێنان مۆڵەتەکەی بپشکنە. GGUF ـی گشتی پێویستە.</small>
+          </div>
+          <div class="offline-note"><span>◈</span><p><strong>بۆ تەواو ئۆفلاین بوون:</strong> Ollama بەکاربهێنە. مۆدێلەکە یەکەم جار لە Hugging Face یان Ollama دابەزێنە؛ پاشان دەتوانیت ئینتەرنێت پچڕێنیت. Hugging Face بە تەنها model hosting ـە، بۆیە Ollama inference ـەکە local ئەنجام دەدات.</p></div>
+        </div>
+      </section>
+      <div class="toast" id="toast" role="status"></div>
+    </main>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
