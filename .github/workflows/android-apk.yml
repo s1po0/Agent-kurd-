@@ -44,6 +44,25 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      - name: Configure stable APK signing
+        id: signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.KURD_AGENT_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.KURD_AGENT_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.KURD_AGENT_KEY_ALIAS }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ]; then
+            key_path="$RUNNER_TEMP/kurd-agent-signing.p12"
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$key_path"
+            echo "KURD_AGENT_KEYSTORE_PATH=$key_path" >> "$GITHUB_ENV"
+            echo "KURD_AGENT_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "KURD_AGENT_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Stable signing is not configured; this debug APK uses a temporary runner key. Add the KURD_AGENT_KEYSTORE_BASE64, KURD_AGENT_KEYSTORE_PASSWORD, and KURD_AGENT_KEY_ALIAS repository secrets for upgrade-safe APKs."
+          fi
+
       - name: Build installable debug APK
         working-directory: android
         shell: bash
@@ -74,6 +93,7 @@ jobs:
           retention-days: 14
 
       - name: Publish APK download release
+        if: steps.signing.outputs.stable == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

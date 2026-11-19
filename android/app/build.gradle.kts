@@ -4,6 +4,11 @@ plugins {
     id("com.chaquo.python")
 }
 
+val stableKeystorePath = System.getenv("KURD_AGENT_KEYSTORE_PATH")
+val stableKeystorePassword = System.getenv("KURD_AGENT_KEYSTORE_PASSWORD")
+val stableKeyAlias = System.getenv("KURD_AGENT_KEY_ALIAS")
+val useStableSigning = !stableKeystorePath.isNullOrBlank() && !stableKeystorePassword.isNullOrBlank() && !stableKeyAlias.isNullOrBlank()
+
 val generatedAssetRoot = layout.buildDirectory.dir("generated/kurd-agent-assets")
 val generatedWebAssets = generatedAssetRoot.map { it.dir("www") }
 val copyKurdAgentWeb by tasks.registering(Copy::class) {
@@ -21,9 +26,24 @@ android {
         applicationId = "com.kurdagent.app"
         minSdk = 24
         targetSdk = 28
-        versionCode = 1
-        versionName = "0.1.0"
+        val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = buildNumber
+        versionName = "0.1.$buildNumber"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+    }
+
+    if (useStableSigning) {
+        signingConfigs.create("stable") {
+            storeFile = file(stableKeystorePath!!)
+            storeType = "PKCS12"
+            storePassword = stableKeystorePassword!!
+            keyAlias = stableKeyAlias!!
+            keyPassword = stableKeystorePassword!!
+        }
+    }
+
+    buildTypes.getByName("debug") {
+        if (useStableSigning) signingConfig = signingConfigs.getByName("stable")
     }
 
     sourceSets.getByName("main").assets.srcDir(generatedAssetRoot)
