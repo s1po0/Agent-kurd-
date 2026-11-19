@@ -78,7 +78,7 @@ jobs:
           result=${PIPESTATUS[0]}
           if [ "$result" -ne 0 ]; then
             echo "### Gradle build failure details" >> "$GITHUB_STEP_SUMMARY"
-            tail -n 60 "$RUNNER_TEMP/gradle-build.log" | while IFS= read -r line; do
+            { grep -E 'FAILURE:|What went wrong:|Execution failed for task|^e: |error:|Could not resolve|Could not find|Unsupported' "$RUNNER_TEMP/gradle-build.log" | tail -n 30 || true; tail -n 20 "$RUNNER_TEMP/gradle-build.log"; } | while IFS= read -r line; do
               echo "::error title=Gradle build::$line"
               echo "- $line" >> "$GITHUB_STEP_SUMMARY"
             done
