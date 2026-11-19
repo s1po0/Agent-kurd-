@@ -4,7 +4,8 @@ plugins {
     id("com.chaquo.python")
 }
 
-val generatedWebAssets = layout.buildDirectory.dir("generated/kurd-agent-assets/www")
+val generatedAssetRoot = layout.buildDirectory.dir("generated/kurd-agent-assets")
+val generatedWebAssets = generatedAssetRoot.map { it.dir("www") }
 val copyKurdAgentWeb by tasks.registering(Copy::class) {
     from(rootProject.layout.projectDirectory.dir("../")) {
         include("server.py", "index.html", "app.js", "styles.css")
@@ -25,7 +26,7 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
-    sourceSets.getByName("main").assets.srcDir(generatedWebAssets)
+    sourceSets.getByName("main").assets.srcDir(generatedAssetRoot)
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

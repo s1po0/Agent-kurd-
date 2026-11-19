@@ -17,6 +17,7 @@ function showPage(name) {
 }
 document.querySelectorAll('.nav-item').forEach(node => node.addEventListener('click', () => showPage(node.dataset.page)));
 $('#newChat').addEventListener('click', clearChat);
+$('#mobileNewChat').addEventListener('click', clearChat);
 function clearChat() { chatHistory = []; $('#messages').replaceChildren(); $('#welcome').hidden = false; $('#promptInput').focus(); }
 
 function escapeHtml(value) {

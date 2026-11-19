@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.webkit.WebResourceRequest
@@ -13,6 +14,7 @@ import android.webkit.WebViewClient
 import android.webkit.WebChromeClient
 import android.widget.FrameLayout
 import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
@@ -69,6 +71,15 @@ class MainActivity : Activity() {
             webView.postDelayed({ webView.loadUrl("http://127.0.0.1:8000/") }, 250)
         } catch (error: Exception) {
             Toast.makeText(this, "Kurd Agent startup failed: ${error.message}", Toast.LENGTH_LONG).show()
+            setContentView(TextView(this).apply {
+                text = "Kurd Agent could not start\\n\\n${error.message}\\n\\nTap to retry"
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                gravity = Gravity.CENTER
+                setPadding(28, 28, 28, 28)
+                setBackgroundColor(Color.rgb(10, 14, 20))
+                setOnClickListener { recreate() }
+            })
         }
     }
 
