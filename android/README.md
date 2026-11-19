@@ -4,7 +4,7 @@ The Android APK embeds the Kurd Agent Python API and Kurdish web UI in a WebView
 
 ## Build a debug APK
 
-Use JDK 17 and Android SDK 37. The build needs the upstream `llama-kotlin` 0.3.0 AAR in `app/libs/`; the CI workflow installs SDK 37, downloads the AAR, and SHA-256-verifies it automatically. For a manual build:
+Use JDK 17 and Android SDK 37. The build needs the upstream `llama-kotlin` 0.3.0 AAR in `app/libs/`; CI verifies its preinstalled SDK 37, downloads the AAR, and SHA-256-verifies it automatically. For a manual build:
 
 ```bash
 mkdir -p app/libs
