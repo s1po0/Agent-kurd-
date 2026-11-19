@@ -46,7 +46,7 @@ android {
         if (useStableSigning) signingConfig = signingConfigs.getByName("stable")
     }
 
-    sourceSets.getByName("main").assets.srcDir(generatedAssetRoot)
+    sourceSets.getByName("main").assets.srcDir(generatedAssetRoot.get().asFile)
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
