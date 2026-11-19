@@ -35,8 +35,10 @@ jobs:
 
       - name: Install Android SDK 37
         run: |
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager --install "platforms;android-37" "build-tools;37.0.0"
+          sdkmanager_path="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          test -n "$sdkmanager_path"
+          yes | "$sdkmanager_path" --licenses >/dev/null
+          "$sdkmanager_path" --install "platforms;android-37" "build-tools;37.0.0"
           test -d "$ANDROID_HOME/platforms/android-37"
           test -d "$ANDROID_HOME/build-tools/37.0.0"
           echo "Using Android SDK 37 at $ANDROID_HOME"
