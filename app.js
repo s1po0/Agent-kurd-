@@ -122,9 +122,18 @@ async function refreshLocalAiStatus() {
 async function refreshOAuthConfig() {
   try {
     const response = await fetch('/api/oauth/config'); const config = await response.json();
-    if (!config.github_ready) $('#githubOauthStatus').textContent = 'چوونەژوورەوەی GitHub هێشتا لەم build ـەدا ڕێکنەخراوە.';
+    const install = $('#githubInstall'), login = $('#githubLogin');
+    install.hidden = !config.github_install_url;
+    if (config.github_install_url) install.href = config.github_install_url;
+    login.disabled = !config.github_ready;
+    $('#githubSetupStatus').hidden = Boolean(config.github_ready);
+    if (!config.github_ready) {
+      const message = 'پەیوەندیی GitHub چالاک نییە: GitHub App ـی Kurd Agent پێویستە یەکجار ڕێکبخرێت.';
+      $('#githubSetupStatus').textContent = message;
+      $('#githubOauthStatus').textContent = message;
+    }
     if (!config.huggingface_ready) $('#hfOauthStatus').textContent = 'چوونەژوورەوەی Hugging Face هێشتا لەم build ـەدا ڕێکنەخراوە.';
-  } catch { /* OAuth buttons will report a useful error if the API is unavailable. */ }
+  } catch { /* Sign-in reports an API error if the server is unavailable. */ }
 }
 function deviceLoginUi(provider) {
   return provider === 'github'

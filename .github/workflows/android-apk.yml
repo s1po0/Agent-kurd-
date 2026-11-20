@@ -73,7 +73,8 @@ jobs:
         working-directory: android
         shell: bash
         env:
-          KURD_AGENT_GITHUB_OAUTH_CLIENT_ID: ${{ vars.KURD_AGENT_GITHUB_OAUTH_CLIENT_ID }}
+          KURD_AGENT_GITHUB_APP_CLIENT_ID: ${{ vars.KURD_AGENT_GITHUB_APP_CLIENT_ID }}
+          KURD_AGENT_GITHUB_APP_SLUG: ${{ vars.KURD_AGENT_GITHUB_APP_SLUG }}
           KURD_AGENT_HF_OAUTH_CLIENT_ID: ${{ vars.KURD_AGENT_HF_OAUTH_CLIENT_ID }}
         run: |
           set +e

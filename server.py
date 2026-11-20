@@ -25,9 +25,11 @@ LOCK = threading.Lock()
 PULL_JOBS = {}
 OAUTH_DEVICE_JOBS = {}
 OAUTH_CLIENT_IDS = {
-    "github": os.environ.get("KURD_AGENT_GITHUB_OAUTH_CLIENT_ID", ""),
+    # GitHub value is the client ID for a GitHub App with device flow enabled, not an OAuth App.
+    "github": os.environ.get("KURD_AGENT_GITHUB_APP_CLIENT_ID", ""),
     "huggingface": os.environ.get("KURD_AGENT_HF_OAUTH_CLIENT_ID", ""),
 }
+GITHUB_APP_SLUG = os.environ.get("KURD_AGENT_GITHUB_APP_SLUG", "")
 DEFAULTS = {"provider": "ollama", "base_url": "http://127.0.0.1:11434", "model": "", "temperature": 0.7}
 HF_REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,120}")
 AGENT_TOOLS = [
@@ -74,6 +76,15 @@ def settings():
 
 def secrets_data():
     return read_json(SECRETS_PATH, {})
+
+
+def github_app_secret_data():
+    saved = secrets_data()
+    if saved.get("github_token") and saved.get("github_auth_type") != "github_app":
+        for key in ("github_token", "github_username", "github_refresh_token", "github_token_expires_at", "github_refresh_token_expires_at"):
+            saved.pop(key, None)
+        write_json_private(SECRETS_PATH, saved)
+    return saved
 
 
 def safe_url(url: str) -> str:
@@ -124,7 +135,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/oauth/config":
-            self.send_json(200, {"github_ready": bool(OAUTH_CLIENT_IDS.get("github")),
+            slug = GITHUB_APP_SLUG if re.fullmatch(r"[A-Za-z0-9-]{1,100}", GITHUB_APP_SLUG) else ""
+            self.send_json(200, {"github_ready": bool(OAUTH_CLIENT_IDS.get("github") and slug),
+                                 "github_install_url": f"https://github.com/apps/{slug}/installations/new" if slug else "",
                                  "huggingface_ready": bool(OAUTH_CLIENT_IDS.get("huggingface"))})
             return
         if path == "/api/local-ai/status":
@@ -159,7 +172,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/status":
             cfg = settings()
-            github = bool(secrets_data().get("github_token"))
+            github_secret = github_app_secret_data()
+            github_expiry = float(github_secret.get("github_token_expires_at") or 0)
+            github = bool(github_secret.get("github_token") and github_secret.get("github_auth_type") == "github_app" and (not github_expiry or github_expiry > time.time()))
             saved_cfg = read_json(CONFIG_PATH, {})
             if cfg["provider"] == "android-local":
                 local = saved_cfg.get("local_model") or {}
@@ -180,8 +195,10 @@ class Handler(BaseHTTPRequestHandler):
                                  "github_connected": github})
             return
         if path == "/api/github/state":
-            secret = secrets_data()
-            self.send_json(200, {"connected": bool(secret.get("github_token")), "username": secret.get("github_username", "")})
+            secret = github_app_secret_data()
+            expiry = float(secret.get("github_token_expires_at") or 0)
+            connected = bool(secret.get("github_token") and secret.get("github_auth_type") == "github_app" and (not expiry or expiry > time.time()))
+            self.send_json(200, {"connected": connected, "username": secret.get("github_username", "")})
             return
         if path == "/api/huggingface/search":
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("q", [""])[0].strip()[:100]
@@ -214,14 +231,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(502, {"error": str(exc), "models": []})
             return
         if path == "/api/github/repos":
-            token = secrets_data().get("github_token")
+            github_secret = github_app_secret_data()
+            token = github_secret.get("github_token") if github_secret.get("github_auth_type") == "github_app" else None
             if not token:
                 self.send_json(401, {"error": "GitHub is not connected yet."})
                 return
             try:
-                data = request_json("https://api.github.com/user/repos?sort=updated&per_page=20", headers={
-                    "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "KurdAgent"
-                })
+                data = self.github_api("/user/repos?sort=updated&per_page=20")
                 self.send_json(200, {"repos": [{"name": r.get("full_name"), "description": r.get("description"), "url": r.get("html_url"), "private": r.get("private"), "stars": r.get("stargazers_count", 0)} for r in data]})
             except Exception as exc:
                 self.send_json(502, {"error": f"Could not load repositories: {exc}"})
@@ -246,10 +262,23 @@ class Handler(BaseHTTPRequestHandler):
         data = request_json(api_base + "/models", headers=headers, timeout=8)
         return [m.get("id") for m in data.get("data", []) if m.get("id")]
 
-    def github_api(self, endpoint, method="GET", data=None):
-        token = secrets_data().get("github_token")
+    def github_access_token(self):
+        saved = secrets_data()
+        token = saved.get("github_token")
+        if token and saved.get("github_auth_type") != "github_app":
+            for key in ("github_token", "github_username", "github_refresh_token", "github_token_expires_at"):
+                saved.pop(key, None)
+            write_json_private(SECRETS_PATH, saved)
+            raise ValueError("Previous broad OAuth connection was removed. Reconnect with the one-repository GitHub App.")
         if not token:
             raise ValueError("Connect GitHub first to use GitHub agent tools.")
+        expires_at = float(saved.get("github_token_expires_at") or 0)
+        if expires_at and expires_at <= time.time() + 60:
+            raise ValueError("GitHub sign-in expired. Connect again from the Connections page.")
+        return token
+
+    def github_api(self, endpoint, method="GET", data=None):
+        token = self.github_access_token()
         return request_json("https://api.github.com" + endpoint, method=method, data=data, headers={
             "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "KurdAgent"}, timeout=30)
@@ -372,7 +401,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def chat_with_tools(self, cfg, messages):
         messages = list(messages)
-        enabled = bool(secrets_data().get("github_token"))
+        github_secret = github_app_secret_data()
+        github_expiry = float(github_secret.get("github_token_expires_at") or 0)
+        enabled = bool(github_secret.get("github_token") and github_secret.get("github_auth_type") == "github_app" and (not github_expiry or github_expiry > time.time()))
         tools = AGENT_TOOLS if enabled else None
         used = []
         for _ in range(5):
@@ -542,11 +573,14 @@ class Handler(BaseHTTPRequestHandler):
     def start_device_oauth(self, provider):
         client_id = OAUTH_CLIENT_IDS.get(provider, "")
         if not client_id:
-            label = "GitHub" if provider == "github" else "Hugging Face"
-            raise ValueError(f"چوونەژوورەوەی {label} هێشتا لەم build ـەدا ڕێکنەخراوە؛ OAuth Client ID پێویستە.")
+            label = "GitHub App" if provider == "github" else "Hugging Face"
+            raise ValueError(f"چوونەژوورەوەی {label} لەم build ـەدا ڕێکنەخراوە؛ Client ID پێویستە.")
         if provider == "github":
+            if not re.fullmatch(r"[A-Za-z0-9-]{1,100}", GITHUB_APP_SLUG):
+                raise ValueError("GitHub App slug is not configured; install Kurd Agent for one selected repository first.")
+            # GitHub App permissions and repository access come from the App installation, not OAuth scopes.
             payload = request_form_json("https://github.com/login/device/code", {
-                "client_id": client_id, "scope": "repo workflow read:user"}, timeout=20)
+                "client_id": client_id}, timeout=20)
         else:
             payload = request_form_json("https://huggingface.co/oauth/device", {
                 "client_id": client_id, "scope": "openid profile read-repos gated-repos"}, timeout=20)
@@ -611,6 +645,13 @@ class Handler(BaseHTTPRequestHandler):
             saved = secrets_data()
             saved[token_key] = access_token
             saved[user_key] = username
+            if provider == "github":
+                saved["github_auth_type"] = "github_app"
+            if provider == "github":
+                # Do not bundle or persist a refresh credential: reconnect after the App token expires.
+                saved.pop("github_refresh_token", None)
+                saved.pop("github_refresh_token_expires_at", None)
+                saved["github_token_expires_at"] = time.time() + int(result.get("expires_in", 28800)) if result.get("expires_in") else 0
             if provider == "huggingface" and result.get("refresh_token"):
                 saved["hf_refresh_token"] = result["refresh_token"]
                 saved["hf_token_expires_at"] = time.time() + int(result.get("expires_in", 0)) if result.get("expires_in") else 0
@@ -731,7 +772,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "Unknown API endpoint"})
             return
         saved = secrets_data()
-        keys = ("github_token", "github_username") if path == "/api/github/connect" else (
+        keys = ("github_token", "github_username", "github_auth_type", "github_refresh_token", "github_token_expires_at",
+                "github_refresh_token_expires_at") if path == "/api/github/connect" else (
             "hf_token", "hf_username", "hf_refresh_token", "hf_token_expires_at")
         for key in keys:
             saved.pop(key, None)

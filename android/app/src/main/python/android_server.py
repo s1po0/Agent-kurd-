@@ -9,7 +9,7 @@ _SERVER = None
 _SERVER_LOCK = threading.Lock()
 
 
-def start_server(app_files_dir, github_oauth_client_id="", hf_oauth_client_id=""):
+def start_server(app_files_dir, github_app_client_id="", hf_oauth_client_id="", github_app_slug=""):
     global _SERVER
     with _SERVER_LOCK:
         if _SERVER is not None:
@@ -23,8 +23,9 @@ def start_server(app_files_dir, github_oauth_client_id="", hf_oauth_client_id=""
 
         import server as kurd_server
         kurd_server.ROOT = web_dir
-        kurd_server.OAUTH_CLIENT_IDS["github"] = github_oauth_client_id
+        kurd_server.OAUTH_CLIENT_IDS["github"] = github_app_client_id
         kurd_server.OAUTH_CLIENT_IDS["huggingface"] = hf_oauth_client_id
+        kurd_server.GITHUB_APP_SLUG = github_app_slug
         _SERVER = ThreadingHTTPServer(("127.0.0.1", 8000), kurd_server.Handler)
         thread = threading.Thread(target=_SERVER.serve_forever, name="kurd-agent-http", daemon=True)
         thread.start()
