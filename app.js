@@ -186,6 +186,38 @@ function setHuggingFaceConnected(connected, username = '') {
   updateConnectionCount();
 }
 $('#gotoConnections').addEventListener('click', () => showPage('connections'));
+async function searchLocalHfModels(query) {
+  query = query.trim();
+  if (query.length < 2) { toast('بۆ گەڕان لانیکەم دوو پیت بنووسە', true); return; }
+  const button = $('#searchLocalHf'), results = $('#localHfResults');
+  button.disabled = true; button.textContent = 'دەگەڕێت...'; results.replaceChildren();
+  try {
+    const response = await fetch('/api/huggingface/search?q=' + encodeURIComponent(query));
+    const data = await response.json(); if (!response.ok) throw new Error(data.error || 'گەڕان سەرکەوتوو نەبوو');
+    if (!data.models.length) { results.textContent = 'مۆدێلی GGUF نەدۆزرایەوە؛ وشەیەکی تر تاقی بکەوە.'; return; }
+    data.models.forEach(model => {
+      const row = document.createElement('div'); row.className = 'hf-result';
+      const info = document.createElement('div'), name = document.createElement('div'), meta = document.createElement('div');
+      name.className = 'hf-result-name'; name.textContent = model.id;
+      meta.className = 'hf-result-meta'; meta.textContent = `${Number(model.downloads || 0).toLocaleString('en-US')} downloads · ${Number(model.likes || 0).toLocaleString('en-US')} likes`;
+      info.append(name, meta);
+      const choose = document.createElement('button'); choose.className = 'text-button'; choose.textContent = 'هەڵبژاردن';
+      choose.addEventListener('click', () => {
+        $('#localHfRepo').value = model.id; results.replaceChildren();
+        $('#loadHfFiles').click();
+      });
+      row.append(info, choose); results.append(row);
+    });
+  } catch (error) { results.textContent = error.message; toast(error.message, true); }
+  finally { button.disabled = false; button.innerHTML = 'گەڕان <span>⌕</span>'; }
+}
+$('#searchLocalHf').addEventListener('click', () => searchLocalHfModels($('#localHfSearch').value));
+$('#localHfSearch').addEventListener('keydown', event => {
+  if (event.key === 'Enter') { event.preventDefault(); searchLocalHfModels($('#localHfSearch').value); }
+});
+document.querySelectorAll('.local-model-preset').forEach(button => button.addEventListener('click', () => {
+  $('#localHfSearch').value = button.dataset.query; searchLocalHfModels(button.dataset.query);
+}));
 $('#disconnectHf').addEventListener('click', async () => {
   try { const response = await fetch('/api/huggingface/connect', {method:'DELETE'}); if (!response.ok) throw new Error(); await refreshLocalAiStatus(); toast('پەیوەندیی Hugging Face جیاکرایەوە'); }
   catch { toast('جیاکردنەوە سەرکەوتوو نەبوو', true); }
@@ -199,7 +231,9 @@ $('#loadHfFiles').addEventListener('click', async () => {
     const select = $('#localHfFile'); select.replaceChildren();
     if (!data.files.length) { select.add(new Option('هیچ فایلی GGUF نییە', '')); throw new Error('ئەم ڕێپۆیە فایلی GGUF ـی گونجاوی نییە.'); }
     data.files.forEach(file => select.add(new Option(`${file.path} · ${formatModelSize(file.size)}`, file.path)));
-    updateLocalFileSize(); toast(`${data.files.length} فایلی GGUF دۆزرایەوە`);
+    const preferred = data.files.find(file => /Q4_K_M/i.test(file.path)) || data.files.find(file => /Q4_0/i.test(file.path)) || data.files[0];
+    if (preferred) select.value = preferred.path;
+    updateLocalFileSize(); toast(`${data.files.length} فایلی GGUF دۆزرایەوە؛ کوانتیزەیشنی Q4 هەڵبژێردرا`);
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; button.innerHTML = 'فایلەکان <span>↻</span>'; }
 });

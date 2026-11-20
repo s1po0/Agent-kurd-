@@ -85,7 +85,15 @@
           <div class="settings-card local-ai-card">
             <div class="card-heading"><div class="heading-icon hf-heading-icon">HF</div><div><h2>Hugging Face و AI ـی ناوخۆیی</h2><p>مۆدێلی GGUF دابەزێنە و لەسەر خودی تەلەفۆنەکەت inference بکە.</p></div></div>
             <div class="hf-auth-row"><div class="hf-auth-fields"><strong id="hfTokenSaved">بۆ مۆدێلی گشتی login پێویست نییە</strong><small class="field-note">بۆ ڕێپۆی تایبەت یان مۆدێلی gated، لە پەڕەی پەیوەندییەکان بە Hugging Face login بکە؛ access token خۆکارانە بە نهێنی هەڵدەگیرێت.</small></div><div class="hf-auth-actions"><button class="primary-button" id="gotoConnections">چوون بۆ پەیوەندییەکان</button></div></div>
-            <label class="field-label" for="localHfRepo">ناوی ڕێپۆ (owner/model)</label><div class="hf-search-row"><input id="localHfRepo" type="text" spellcheck="false" placeholder="bartowski/Qwen2.5-1.5B-Instruct-GGUF"><button class="primary-button" id="loadHfFiles">فایلەکان <span>↻</span></button></div>
+            <p class="field-note">مۆدێلی پێشنیارکراو هەڵبژێرە یان بگەڕێ؛ لە لیستەکەدا ڕێپۆی GGUF هەڵبژێرە، پاشان فایلی Q4_K_M و داگرتن.</p>
+            <div class="suggestions local-model-presets">
+              <button class="suggestion local-model-preset" data-query="Qwen2.5 3B Instruct abliterated GGUF"><span class="suggestion-icon mint">3B</span><span><strong>Qwen 3B · کەم‌سانسۆر</strong><small>گونجاو بۆ مۆبایلی RAM ـی کەم</small></span></button>
+              <button class="suggestion local-model-preset" data-query="Dolphin Llama 3.1 8B GGUF"><span class="suggestion-icon blue">8B</span><span><strong>Dolphin Llama 8B</strong><small>کوالێتی باشتر؛ RAM ـی زیاتر دەوێت</small></span></button>
+              <button class="suggestion local-model-preset" data-query="Dolphin Mistral Nemo 12B GGUF"><span class="suggestion-icon amber">12B</span><span><strong>Dolphin Nemo 12B</strong><small>قورسە؛ بۆ مۆبایلی بەهێز</small></span></button>
+            </div>
+            <label class="field-label" for="localHfSearch">گەڕان بۆ مۆدێلی GGUF</label><div class="hf-search-row"><input id="localHfSearch" type="search" placeholder="ناوی مۆدێل یان Dolphin, Qwen..."><button class="primary-button" id="searchLocalHf">گەڕان <span>⌕</span></button></div>
+            <div class="hf-results" id="localHfResults"></div>
+            <label class="field-label" for="localHfRepo">ڕێپۆی هەڵبژێردراو (owner/model)</label><div class="hf-search-row"><input id="localHfRepo" type="text" spellcheck="false" placeholder="لە ئەنجامی گەڕان هەڵبژێرە"><button class="primary-button" id="loadHfFiles">فایلەکان <span>↻</span></button></div>
             <label class="field-label" for="localHfFile">فایلی GGUF <span id="localHfFileSize" class="optional"></span></label><select id="localHfFile"><option value="">سەرەتا ڕێپۆکە بپشکنە</option></select>
             <div class="hf-search-row"><button class="primary-button" id="downloadLocalModel">داگرتن بۆ ئەم ئامێرە <span>↓</span></button><span class="field-note" id="localModelState">هیچ مۆدێلێک لۆد نەکراوە</span></div>
             <div class="download-progress" id="localDownloadProgress" hidden><div class="progress-meta"><span id="localDownloadStatus">ئامادەکاری...</span><span id="localDownloadPercent">0%</span></div><div class="progress-track"><span id="localDownloadBar"></span></div></div>
