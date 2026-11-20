@@ -98,6 +98,11 @@ def github_app_config():
     return client_id, client_secret, slug, installation_id
 
 
+def huggingface_oauth_client_id():
+    saved = secrets_data()
+    return str(saved.get("hf_oauth_client_id") or OAUTH_CLIENT_IDS.get("huggingface", ""))
+
+
 def safe_url(url: str) -> str:
     url = url.strip().rstrip("/")
     parsed = urllib.parse.urlparse(url)
@@ -292,7 +297,7 @@ class Handler(BaseHTTPRequestHandler):
                                  "github_installed": bool(installation_id),
                                  "github_ready": bool(client_id and valid_slug and installation_id),
                                  "github_install_url": f"https://github.com/apps/{valid_slug}/installations/new" if valid_slug else "",
-                                 "huggingface_ready": bool(OAUTH_CLIENT_IDS.get("huggingface"))})
+                                 "huggingface_ready": bool(huggingface_oauth_client_id())})
             return
         if path == "/api/local-ai/status":
             cfg = read_json(CONFIG_PATH, {})
@@ -751,9 +756,9 @@ class Handler(BaseHTTPRequestHandler):
             payload = request_form_json("https://github.com/login/device/code", {
                 "client_id": client_id}, timeout=20)
         else:
-            client_id = OAUTH_CLIENT_IDS.get(provider, "")
+            client_id = huggingface_oauth_client_id()
             if not client_id:
-                raise ValueError("Hugging Face OAuth Client ID is not configured in this build.")
+                raise ValueError("Create a Hugging Face OAuth app and save its public Client ID in Connections first.")
             payload = request_form_json("https://huggingface.co/oauth/device", {
                 "client_id": client_id, "scope": "openid profile read-repos gated-repos"}, timeout=20)
         if payload.get("error") or not payload.get("device_code") or not payload.get("user_code"):
@@ -847,6 +852,15 @@ class Handler(BaseHTTPRequestHandler):
             data = self.body()
             if path == "/api/github/app-manifest/start":
                 self.send_json(200, self.begin_github_app_manifest())
+                return
+            if path == "/api/oauth/huggingface/client-id":
+                client_id = str(data.get("client_id", "")).strip()
+                if not client_id or not re.fullmatch(r"[A-Za-z0-9._-]{4,255}", client_id):
+                    raise ValueError("Enter the public Hugging Face OAuth Client ID (not the Client Secret or an access token).")
+                saved = secrets_data()
+                saved["hf_oauth_client_id"] = client_id
+                write_json_private(SECRETS_PATH, saved)
+                self.send_json(200, {"ok": True, "huggingface_ready": True})
                 return
             if path == "/api/settings":
                 old = read_json(CONFIG_PATH, {})

@@ -135,7 +135,10 @@ async function refreshOAuthConfig() {
       $('#githubSetupStatus').textContent = message;
       $('#githubOauthStatus').textContent = message;
     }
-    if (!config.huggingface_ready) $('#hfOauthStatus').textContent = 'چوونەژوورەوەی Hugging Face هێشتا لەم build ـەدا ڕێکنەخراوە.';
+    $('#hfLogin').disabled = !config.huggingface_ready;
+    $('#hfOauthStatus').textContent = config.huggingface_ready
+      ? 'Client ID ئامادەیە؛ کۆدەکە لە Hugging Face بنووسە و مۆڵەت بدە.'
+      : 'بۆ مۆدێلی گشتی login پێویست نییە. بۆ مۆدێلی تایبەت، OAuth App دروست بکە و Client ID پاشەکەوت بکە.';
   } catch { /* Sign-in reports an API error if the server is unavailable. */ }
 }
 function deviceLoginUi(provider) {
@@ -175,6 +178,17 @@ $('#githubCreateApp').addEventListener('click', () => {
   else window.open(url, '_blank', 'noopener');
 });
 $('#githubLogin').addEventListener('click', () => beginDeviceLogin('github'));
+$('#saveHfOauthClientId').addEventListener('click', async () => {
+  const button = $('#saveHfOauthClientId'), input = $('#hfOauthClientId'), client_id = input.value.trim();
+  if (!client_id) { toast('Client ID ـی گشتی لە Hugging Face بنووسە', true); return; }
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/oauth/huggingface/client-id', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({client_id})});
+    const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Client ID پاشەکەوت نەکرا');
+    input.value = ''; await refreshOAuthConfig(); toast('Hugging Face OAuth ڕێکخرا؛ ئێستا login بکە');
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
+});
 $('#hfLogin').addEventListener('click', () => beginDeviceLogin('huggingface'));
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshOAuthConfig(); refreshGithub(); } });
 window.addEventListener('focus', () => { refreshOAuthConfig(); refreshGithub(); });

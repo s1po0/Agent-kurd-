@@ -19,7 +19,7 @@ A GitHub Actions workflow builds the APK and publishes it as the `Kurd-Agent-And
 
 ## Use Hugging Face and offline local AI
 
-In Settings, select **Android Local AI**, optionally connect a Hugging Face user access token, enter a model repository (`owner/model`), and choose a `.gguf` file. Public repositories can be searched/downloaded without signing in. A read token is needed for private or gated repositories and is validated with Hugging Face before it is saved. The token is kept in app-private storage and is not sent with ordinary chat requests.
+In Settings, select **Android Local AI**, search the built-in GGUF catalog or choose a suggested model, then select a `.gguf` file and download it. Public repositories can be searched/downloaded without signing in. For private or gated repositories, create a Hugging Face OAuth App in your account settings and save its public Client ID from Connections; do not paste a Client Secret or access token. Kurd Agent performs the official device authorization and keeps the resulting short-lived access token in app-private storage; it is not sent with ordinary chat requests.
 
 Downloading model weights requires internet and sufficient free storage. Once a GGUF is fully downloaded to the phone, inference runs through llama.cpp on the device; chat does not need the network. Model weights are not included in the APK. Start with a small quantized model and check its size, license, and memory requirements—large models may be too slow or may exceed a phone's available RAM. Only `arm64-v8a` and `x86_64` Android devices are supported by this build.
 

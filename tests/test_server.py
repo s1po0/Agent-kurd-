@@ -76,6 +76,22 @@ class ApiTest(unittest.TestCase):
         self.assertNotIn("api_key", result["settings"])
         self.assertEqual(json.loads(self.config.read_text())["api_key"], "secret-value")
 
+    def test_huggingface_oauth_client_id_can_be_saved_and_used_for_device_login(self):
+        status, result = self.call_api("/api/oauth/huggingface/client-id", {"client_id": "hf-client-public-1234"})
+        self.assertEqual(status, 200)
+        self.assertTrue(result["huggingface_ready"])
+        self.assertEqual(json.loads(self.secrets.read_text())["hf_oauth_client_id"], "hf-client-public-1234")
+        status, config = self.call_api("/api/oauth/config")
+        self.assertTrue(config["huggingface_ready"])
+        self.assertNotIn("huggingface_client_id", config)
+        with patch.object(server, "request_form_json", return_value={
+                "device_code": "device-code", "user_code": "ABCD-EFGH", "verification_uri": "https://huggingface.co/oauth/device",
+                "expires_in": 600, "interval": 5}) as oauth_request:
+            status, session = self.call_api("/api/oauth/device/start", {"provider": "huggingface"})
+        self.assertEqual(status, 200)
+        self.assertEqual(oauth_request.call_args.args[1]["client_id"], "hf-client-public-1234")
+        self.assertEqual(session["user_code"], "ABCD-EFGH")
+
     def test_github_manifest_registration_and_installation_flow(self):
         with urlopen(self.base + "/api/github/app-manifest/start-page", timeout=3) as response:
             self.assertIn("All repositories", response.read().decode())
