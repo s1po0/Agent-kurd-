@@ -2,6 +2,7 @@ import json
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -74,6 +75,37 @@ class ApiTest(unittest.TestCase):
         self.assertTrue(result["has_api_key"])
         self.assertNotIn("api_key", result["settings"])
         self.assertEqual(json.loads(self.config.read_text())["api_key"], "secret-value")
+
+    def test_github_manifest_registration_and_installation_flow(self):
+        with urlopen(self.base + "/api/github/app-manifest/start-page", timeout=3) as response:
+            self.assertIn("All repositories", response.read().decode())
+        status, setup = self.call_api("/api/github/app-manifest/start", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(setup["action_url"].split("?")[0], "https://github.com/settings/apps/new")
+        self.assertEqual(setup["manifest"]["default_permissions"], {
+            "contents": "write", "workflows": "write", "actions": "write", "pull_requests": "write"})
+        self.assertIn("/api/github/app-installed?state=", setup["manifest"]["setup_url"])
+        state = setup["state"]
+        req = Request(self.base + "/api/github/app-manifest/callback?" + urllib.parse.urlencode({
+            "state": state, "code": "abc123def456ghi789jkl"}))
+        with patch.object(server, "request_json", return_value={"client_id": "Iv1.example", "client_secret": "private-secret",
+                "slug": "kurd-agent", "pem": "must-not-be-saved", "webhook_secret": "must-not-be-saved"}):
+            with urlopen(req, timeout=3) as response:
+                self.assertEqual(response.status, 200)
+                self.assertIn("Device Flow", response.read().decode())
+        saved = json.loads(self.secrets.read_text())
+        self.assertEqual(saved["github_app_client_id"], "Iv1.example")
+        self.assertEqual(saved["github_app_client_secret"], "private-secret")
+        self.assertNotIn("pem", saved)
+        install_state = saved["github_app_install_state"]
+        with urlopen(self.base + "/api/github/app-installed?" + __import__("urllib.parse").parse.urlencode({
+                "state": install_state, "installation_id": "98765", "setup_action": "install"}), timeout=3) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("Kurd Agent installed", response.read().decode())
+        status, config = self.call_api("/api/oauth/config")
+        self.assertEqual(status, 200)
+        self.assertTrue(config["github_ready"])
+        self.assertEqual(json.loads(self.secrets.read_text())["github_app_installation_id"], "98765")
 
     def test_chat_proxies_to_ollama(self):
         self.config.write_text(json.dumps({"provider": "ollama", "base_url": "http://127.0.0.1:11434", "model": "local-test"}))

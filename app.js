@@ -122,13 +122,16 @@ async function refreshLocalAiStatus() {
 async function refreshOAuthConfig() {
   try {
     const response = await fetch('/api/oauth/config'); const config = await response.json();
-    const install = $('#githubInstall'), login = $('#githubLogin');
-    install.hidden = !config.github_install_url;
+    const install = $('#githubInstall'), login = $('#githubLogin'), create = $('#githubCreateApp');
+    create.hidden = Boolean(config.github_registered);
+    install.hidden = !config.github_registered || config.github_installed || !config.github_install_url;
     if (config.github_install_url) install.href = config.github_install_url;
     login.disabled = !config.github_ready;
     $('#githubSetupStatus').hidden = Boolean(config.github_ready);
     if (!config.github_ready) {
-      const message = 'پەیوەندیی GitHub چالاک نییە: GitHub App ـی Kurd Agent پێویستە یەکجار ڕێکبخرێت.';
+      const message = !config.github_registered
+        ? 'سەرەتا لە GitHub ـەوە GitHub App ـی Kurd Agent دروست بکە.'
+        : 'لە ڕێکخستنەکانی GitHub App، Device Flow چالاک بکە؛ پاشان Install، All repositories و Save.';
       $('#githubSetupStatus').textContent = message;
       $('#githubOauthStatus').textContent = message;
     }
@@ -166,8 +169,15 @@ async function beginDeviceLogin(provider) {
   } catch (error) { ui.status.textContent = error.message; ui.panel.hidden = false; toast(error.message, true); }
   finally { ui.button.disabled = false; ui.button.innerHTML = `چوونەژوورەوە بە ${provider === 'github' ? 'GitHub' : 'Hugging Face'} <span>↗</span>`; }
 }
+$('#githubCreateApp').addEventListener('click', () => {
+  const url = `${location.origin}/api/github/app-manifest/start-page`;
+  if (window.KurdLocalAI?.openVerificationUrl) window.KurdLocalAI.openVerificationUrl(url);
+  else window.open(url, '_blank', 'noopener');
+});
 $('#githubLogin').addEventListener('click', () => beginDeviceLogin('github'));
 $('#hfLogin').addEventListener('click', () => beginDeviceLogin('huggingface'));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshOAuthConfig(); refreshGithub(); } });
+window.addEventListener('focus', () => { refreshOAuthConfig(); refreshGithub(); });
 function setHuggingFaceConnected(connected, username = '') {
   $('#hfBadge').textContent = connected ? `پەیوەستە${username ? ': ' + username : ''}` : 'پەیوەست نییە';
   $('#hfBadge').classList.toggle('connected-badge', connected);

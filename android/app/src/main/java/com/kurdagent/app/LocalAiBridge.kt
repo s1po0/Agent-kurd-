@@ -27,7 +27,9 @@ class LocalAiBridge(
     @JavascriptInterface
     fun openVerificationUrl(url: String) {
         val uri = Uri.parse(url)
-        if (uri.scheme != "https" || uri.host !in setOf("github.com", "huggingface.co")) return
+        val allowedHttps = uri.scheme == "https" && uri.host in setOf("github.com", "huggingface.co")
+        val allowedLocalSetup = uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == 8000 && uri.path == "/api/github/app-manifest/start-page"
+        if (!allowedHttps && !allowedLocalSetup) return
         try { activity.startActivity(Intent(Intent.ACTION_VIEW, uri)) } catch (_: Exception) { }
     }
 

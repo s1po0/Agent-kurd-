@@ -72,8 +72,7 @@ class MainActivity : Activity() {
             copyWebAssets()
             if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
             Python.getInstance().getModule("android_server").callAttr(
-                "start_server", filesDir.absolutePath, BuildConfig.GITHUB_APP_CLIENT_ID,
-                BuildConfig.HF_OAUTH_CLIENT_ID, BuildConfig.GITHUB_APP_SLUG
+                "start_server", filesDir.absolutePath, BuildConfig.HF_OAUTH_CLIENT_ID
             )
             webView.postDelayed({ webView.loadUrl("http://127.0.0.1:8000/") }, 250)
         } catch (error: Exception) {

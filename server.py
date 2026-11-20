@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import base64
+import html
 import os
 import re
 import shutil
@@ -24,6 +25,7 @@ SECRETS_PATH = DATA_DIR / "secrets.json"
 LOCK = threading.Lock()
 PULL_JOBS = {}
 OAUTH_DEVICE_JOBS = {}
+APP_MANIFEST_JOBS = {}
 OAUTH_CLIENT_IDS = {
     # GitHub value is the client ID for a GitHub App with device flow enabled, not an OAuth App.
     "github": os.environ.get("KURD_AGENT_GITHUB_APP_CLIENT_ID", ""),
@@ -87,6 +89,15 @@ def github_app_secret_data():
     return saved
 
 
+def github_app_config():
+    saved = github_app_secret_data()
+    client_id = saved.get("github_app_client_id") or OAUTH_CLIENT_IDS.get("github", "")
+    client_secret = saved.get("github_app_client_secret", "")
+    slug = saved.get("github_app_slug") or GITHUB_APP_SLUG
+    installation_id = saved.get("github_app_installation_id")
+    return client_id, client_secret, slug, installation_id
+
+
 def safe_url(url: str) -> str:
     url = url.strip().rstrip("/")
     parsed = urllib.parse.urlparse(url)
@@ -116,7 +127,9 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "KurdAgent/0.1"
 
     def log_message(self, fmt, *args):
-        # Keep logs useful but never print request bodies or credentials.
+        # Manifest handshakes carry a one-time code in the query string; never log it.
+        if urllib.parse.urlparse(self.path).path in ("/api/github/app-manifest/callback", "/api/github/app-installed"):
+            return
         super().log_message(fmt, *args)
 
     def send_json(self, status, payload):
@@ -128,16 +141,157 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def send_html(self, status, content):
+        raw = content.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action https://github.com; base-uri 'none'; frame-ancestors 'none'")
+        self.end_headers()
+        self.wfile.write(raw)
+
     def body(self):
         length = min(int(self.headers.get("Content-Length", "0")), 1_000_000)
         return json.loads(self.rfile.read(length) or b"{}")
 
+    def app_manifest_page(self, title, message, install_url=""):
+        link = (f'<p><a href="{html.escape(install_url, quote=True)}">Install Kurd Agent and choose All repositories</a></p>'
+                if install_url else "")
+        return ("<!doctype html><html lang='en'><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
+                f"<title>{html.escape(title)}</title><body style='font:16px system-ui;max-width:42rem;margin:3rem auto;padding:1rem'>"
+                f"<h1>{html.escape(title)}</h1><p>{html.escape(message)}</p>{link}"
+                "<p>You can return to the Kurd Agent app after this step.</p></body></html>")
+
+    def begin_github_app_manifest(self):
+        if github_app_config()[0]:
+            raise ValueError("A GitHub App is already configured. Use its install or login button.")
+        state = secrets.token_urlsafe(24)
+        install_state = secrets.token_urlsafe(24)
+        callback_base = os.environ.get("KURD_AGENT_CALLBACK_BASE_URL", f"http://127.0.0.1:{os.environ.get('PORT', '8000')}").rstrip("/")
+        if not callback_base.startswith("http://127.0.0.1:") and not callback_base.startswith("http://localhost:"):
+            raise ValueError("The GitHub App setup callback must use this device's local server.")
+        redirect_url = callback_base + "/api/github/app-manifest/callback"
+        setup_url = callback_base + "/api/github/app-installed?state=" + urllib.parse.quote(install_state)
+        manifest = {
+            "name": "Kurd Agent",
+            "url": "https://github.com/s1po0/Agent-kurd-",
+            "description": "Kurd Agent integration for repository files, pull requests, and GitHub Actions.",
+            "redirect_url": redirect_url,
+            "setup_url": setup_url,
+            "public": False,
+            "request_oauth_on_install": False,
+            "default_events": [],
+            "default_permissions": {
+                "contents": "write", "workflows": "write", "actions": "write", "pull_requests": "write"
+            },
+        }
+        expires_at = time.time() + 3600
+        with LOCK:
+            APP_MANIFEST_JOBS[state] = {"install_state": install_state, "expires_at": expires_at}
+        saved = secrets_data()
+        saved.update({"github_app_manifest_state": state, "github_app_manifest_install_state": install_state,
+                      "github_app_manifest_expires_at": expires_at})
+        write_json_private(SECRETS_PATH, saved)
+        return {"state": state, "action_url": "https://github.com/settings/apps/new?state=" + urllib.parse.quote(state),
+                "manifest": manifest}
+
+    def handle_github_app_manifest_callback(self, query):
+        state = query.get("state", [""])[0]
+        code = query.get("code", [""])[0]
+        if query.get("error"):
+            self.send_html(400, self.app_manifest_page("GitHub App not created", "GitHub did not complete app creation. Return to Kurd Agent and try again."))
+            return
+        saved = secrets_data()
+        persisted_state = str(saved.get("github_app_manifest_state", ""))
+        with LOCK:
+            pending = APP_MANIFEST_JOBS.get(state)
+            valid_state = pending is not None or bool(persisted_state and secrets.compare_digest(state, persisted_state))
+            if pending is not None:
+                APP_MANIFEST_JOBS.pop(state, None)
+        if pending is None and valid_state:
+            pending = {"install_state": saved.get("github_app_manifest_install_state", ""),
+                       "expires_at": float(saved.get("github_app_manifest_expires_at") or 0)}
+        if not valid_state:
+            self.send_html(400, self.app_manifest_page("Setup expired", "The GitHub setup link expired or was invalid. Start again from Kurd Agent."))
+            return
+        if persisted_state and secrets.compare_digest(state, persisted_state):
+            for key in ("github_app_manifest_state", "github_app_manifest_install_state", "github_app_manifest_expires_at"):
+                saved.pop(key, None)
+            write_json_private(SECRETS_PATH, saved)
+        if (not pending or time.time() > pending["expires_at"] or
+                not re.fullmatch(r"[A-Za-z0-9]{20,100}", code)):
+            self.send_html(400, self.app_manifest_page("Setup expired", "The GitHub setup link expired or was invalid. Start again from Kurd Agent."))
+            return
+        try:
+            app = request_json("https://api.github.com/app-manifests/" + urllib.parse.quote(code, safe="") + "/conversions",
+                               method="POST", headers={"Accept": "application/vnd.github+json", "User-Agent": "KurdAgent"}, timeout=30)
+            client_id = str(app.get("client_id", ""))
+            client_secret = str(app.get("client_secret", ""))
+            slug = str(app.get("slug", ""))
+            if not client_id or not client_secret or not re.fullmatch(r"[A-Za-z0-9-]{1,100}", slug):
+                raise ValueError("GitHub did not return a complete App registration.")
+            saved = secrets_data()
+            for key in ("github_token", "github_username", "github_auth_type", "github_refresh_token",
+                        "github_token_expires_at", "github_refresh_token_expires_at", "github_app_installation_id"):
+                saved.pop(key, None)
+            saved.update({"github_app_client_id": client_id, "github_app_client_secret": client_secret,
+                          "github_app_slug": slug, "github_app_install_state": pending["install_state"]})
+            # The manifest response also contains a private key and webhook secret; neither is persisted or returned.
+            write_json_private(SECRETS_PATH, saved)
+            install_url = f"https://github.com/apps/{urllib.parse.quote(slug, safe='-')}/installations/new"
+            self.send_html(200, self.app_manifest_page("Kurd Agent GitHub App created",
+                "The App was created in your GitHub account. In its Developer settings, enable Device Flow, install it and select All repositories, then return to Kurd Agent to log in.", install_url))
+        except Exception:
+            self.send_html(502, self.app_manifest_page("Could not finish GitHub setup", "GitHub App creation could not be completed. Return to Kurd Agent and try again."))
+
+    def handle_github_app_install_callback(self, query):
+        saved = secrets_data()
+        expected = str(saved.get("github_app_install_state", ""))
+        state = query.get("state", [""])[0]
+        install_id = query.get("installation_id", [""])[0]
+        action = query.get("setup_action", [""])[0]
+        if (not expected or not secrets.compare_digest(state, expected) or
+                not install_id.isdigit() or action not in ("install", "update")):
+            self.send_html(400, self.app_manifest_page("Installation not confirmed", "GitHub did not confirm this App installation. Return to Kurd Agent and retry."))
+            return
+        saved["github_app_installation_id"] = install_id
+        write_json_private(SECRETS_PATH, saved)
+        self.send_html(200, self.app_manifest_page("Kurd Agent installed",
+            "GitHub App installation was saved. Return to Kurd Agent and press GitHub Login to authorize the connection."))
+
     def do_GET(self):
-        path = urllib.parse.urlparse(self.path).path
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
+        if path == "/api/github/app-manifest/start-page":
+            try:
+                setup = self.begin_github_app_manifest()
+                manifest_value = html.escape(json.dumps(setup["manifest"], separators=(",", ":")), quote=True)
+                action = html.escape(setup["action_url"], quote=True)
+                page = ("<!doctype html><html lang='en'><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
+                        "<title>Create Kurd Agent GitHub App</title><body style='font:16px system-ui;max-width:42rem;margin:3rem auto;padding:1rem'>"
+                        "<h1>Create Kurd Agent GitHub App</h1><p>Continue to GitHub, create the App, then install it and choose All repositories.</p>"
+                        f"<form method='post' action='{action}'><input type='hidden' name='manifest' value='{manifest_value}'>"
+                        "<button type='submit'>Continue to GitHub</button></form></body></html>")
+                self.send_html(200, page)
+            except Exception as exc:
+                self.send_json(400, {"error": str(exc)})
+            return
+        if path == "/api/github/app-manifest/callback":
+            self.handle_github_app_manifest_callback(query)
+            return
+        if path == "/api/github/app-installed":
+            self.handle_github_app_install_callback(query)
+            return
         if path == "/api/oauth/config":
-            slug = GITHUB_APP_SLUG if re.fullmatch(r"[A-Za-z0-9-]{1,100}", GITHUB_APP_SLUG) else ""
-            self.send_json(200, {"github_ready": bool(OAUTH_CLIENT_IDS.get("github") and slug),
-                                 "github_install_url": f"https://github.com/apps/{slug}/installations/new" if slug else "",
+            client_id, _client_secret, slug, installation_id = github_app_config()
+            valid_slug = slug if re.fullmatch(r"[A-Za-z0-9-]{1,100}", slug) else ""
+            self.send_json(200, {"github_registered": bool(client_id and valid_slug),
+                                 "github_installed": bool(installation_id),
+                                 "github_ready": bool(client_id and valid_slug and installation_id),
+                                 "github_install_url": f"https://github.com/apps/{valid_slug}/installations/new" if valid_slug else "",
                                  "huggingface_ready": bool(OAUTH_CLIENT_IDS.get("huggingface"))})
             return
         if path == "/api/local-ai/status":
@@ -274,7 +428,23 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Connect GitHub first to use GitHub agent tools.")
         expires_at = float(saved.get("github_token_expires_at") or 0)
         if expires_at and expires_at <= time.time() + 60:
-            raise ValueError("GitHub sign-in expired. Connect again from the Connections page.")
+            refresh_token = saved.get("github_refresh_token")
+            client_id, client_secret, _slug, _installation = github_app_config()
+            if not refresh_token or not client_id or not client_secret:
+                raise ValueError("GitHub sign-in expired. Connect again from the Connections page.")
+            result = request_form_json("https://github.com/login/oauth/access_token", {
+                "client_id": client_id, "client_secret": client_secret,
+                "grant_type": "refresh_token", "refresh_token": refresh_token}, timeout=20)
+            if result.get("error") or not result.get("access_token"):
+                raise ValueError(result.get("error_description") or "GitHub sign-in expired. Connect again.")
+            with LOCK:
+                saved = secrets_data()
+                saved["github_token"] = result["access_token"]
+                if result.get("refresh_token"):
+                    saved["github_refresh_token"] = result["refresh_token"]
+                saved["github_token_expires_at"] = time.time() + int(result.get("expires_in", 28800)) if result.get("expires_in") else 0
+                write_json_private(SECRETS_PATH, saved)
+            return result["access_token"]
         return token
 
     def github_api(self, endpoint, method="GET", data=None):
@@ -571,17 +741,19 @@ class Handler(BaseHTTPRequestHandler):
                     PULL_JOBS[job_id].update({"state": "error", "error": str(exc), "status": "Download failed"})
 
     def start_device_oauth(self, provider):
-        client_id = OAUTH_CLIENT_IDS.get(provider, "")
-        if not client_id:
-            label = "GitHub App" if provider == "github" else "Hugging Face"
-            raise ValueError(f"چوونەژوورەوەی {label} لەم build ـەدا ڕێکنەخراوە؛ Client ID پێویستە.")
         if provider == "github":
-            if not re.fullmatch(r"[A-Za-z0-9-]{1,100}", GITHUB_APP_SLUG):
-                raise ValueError("GitHub App slug is not configured; install the Kurd Agent GitHub App first.")
+            client_id, _client_secret, slug, installation_id = github_app_config()
+            if not client_id or not re.fullmatch(r"[A-Za-z0-9-]{1,100}", slug):
+                raise ValueError("سەرەتا GitHub App ـی Kurd Agent دروست بکە.")
+            if not installation_id:
+                raise ValueError("سەرەتا GitHub App دابمەزرێنە و All repositories پەسەند بکە.")
             # GitHub App permissions and repository access come from the App installation, not OAuth scopes.
             payload = request_form_json("https://github.com/login/device/code", {
                 "client_id": client_id}, timeout=20)
         else:
+            client_id = OAUTH_CLIENT_IDS.get(provider, "")
+            if not client_id:
+                raise ValueError("Hugging Face OAuth Client ID is not configured in this build.")
             payload = request_form_json("https://huggingface.co/oauth/device", {
                 "client_id": client_id, "scope": "openid profile read-repos gated-repos"}, timeout=20)
         if payload.get("error") or not payload.get("device_code") or not payload.get("user_code"):
@@ -646,12 +818,12 @@ class Handler(BaseHTTPRequestHandler):
             saved[token_key] = access_token
             saved[user_key] = username
             if provider == "github":
-                saved["github_auth_type"] = "github_app"
-            if provider == "github":
-                # Do not bundle or persist a refresh credential: reconnect after the App token expires.
-                saved.pop("github_refresh_token", None)
-                saved.pop("github_refresh_token_expires_at", None)
                 saved["github_token_expires_at"] = time.time() + int(result.get("expires_in", 28800)) if result.get("expires_in") else 0
+                if result.get("refresh_token"):
+                    saved["github_refresh_token"] = result["refresh_token"]
+                if result.get("refresh_token_expires_in"):
+                    saved["github_refresh_token_expires_at"] = time.time() + int(result["refresh_token_expires_in"])
+                saved["github_auth_type"] = "github_app"
             if provider == "huggingface" and result.get("refresh_token"):
                 saved["hf_refresh_token"] = result["refresh_token"]
                 saved["hf_token_expires_at"] = time.time() + int(result.get("expires_in", 0)) if result.get("expires_in") else 0
@@ -673,6 +845,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             data = self.body()
+            if path == "/api/github/app-manifest/start":
+                self.send_json(200, self.begin_github_app_manifest())
+                return
             if path == "/api/settings":
                 old = read_json(CONFIG_PATH, {})
                 provider = data.get("provider", "ollama")
@@ -794,7 +969,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https://github.com")
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(raw)
