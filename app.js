@@ -1,5 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
 const pages = {chat: $('#chatPage'), connections: $('#connectionsPage'), settings: $('#settingsPage')};
+// This older HF import card targets a running Ollama daemon; Android has its own GGUF downloader and native runtime.
+if (window.KurdLocalAI) document.querySelector('.hf-card')?.setAttribute('hidden', '');
 let chatHistory = [];
 let toastTimer;
 let localCallSequence = 0;
