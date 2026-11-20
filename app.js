@@ -293,7 +293,9 @@ $('#downloadLocalModel').addEventListener('click', async () => {
     await saveModelSettings('');
     await callLocalAi('loadModel', state.model_path);
     $('#localDownloadStatus').textContent = 'مۆدێل لەسەر ئامێر لۆد کرا؛ inferencing ئۆفلاینە';
-    await refreshStatus(); toast('مۆدێل لۆد کرا و بۆ چاتی ئۆفلاین ئامادەیە');
+    await refreshStatus(); showPage('chat');
+    setTimeout(() => $('#promptInput').focus(), 100);
+    toast('مۆدێل لۆد کرا؛ ئێستا پرسیارەکەت بنووسە بۆ چاتی ئۆفلاین');
   } catch (error) { $('#localDownloadStatus').textContent = error.message; toast(error.message, true); }
   finally { button.disabled = false; button.innerHTML = 'داگرتن بۆ ئەم ئامێرە <span>↓</span>'; }
 });
