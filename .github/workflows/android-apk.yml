@@ -76,11 +76,27 @@ jobs:
           KURD_AGENT_HF_OAUTH_CLIENT_ID: ${{ vars.KURD_AGENT_HF_OAUTH_CLIENT_ID }}
         run: |
           set +e
-          gradle --no-daemon --stacktrace --console=plain :app:assembleDebug 2>&1 | tee "$RUNNER_TEMP/gradle-build.log"
-          result=${PIPESTATUS[0]}
+          build_log="$RUNNER_TEMP/gradle-build.log"
+          : > "$build_log"
+          result=1
+          for attempt in 1 2 3; do
+            attempt_log="$RUNNER_TEMP/gradle-attempt-$attempt.log"
+            extra_args=()
+            if [ "$attempt" -gt 1 ]; then extra_args+=(--refresh-dependencies); fi
+            gradle --no-daemon --stacktrace --console=plain "${extra_args[@]}" :app:assembleDebug 2>&1 | tee "$attempt_log"
+            result=${PIPESTATUS[0]}
+            cat "$attempt_log" >> "$build_log"
+            if [ "$result" -eq 0 ]; then break; fi
+            if [ "$attempt" -lt 3 ] && grep -Eiq 'plugin.*(was not found|could not resolve)|could not resolve plugin artifact' "$attempt_log"; then
+              echo "Plugin repository resolution failed on attempt $attempt; retrying after 15 seconds..."
+              sleep 15
+            else
+              break
+            fi
+          done
           if [ "$result" -ne 0 ]; then
             echo "### Gradle build failure details" >> "$GITHUB_STEP_SUMMARY"
-            { grep -E 'FAILURE:|What went wrong:|Execution failed for task|^e: |error:|Could not resolve|Could not find|Unsupported' "$RUNNER_TEMP/gradle-build.log" | tail -n 30 || true; awk '/What went wrong:/{for(i=0;i<12;i++){print; if(getline<=0)exit}}' "$RUNNER_TEMP/gradle-build.log"; tail -n 20 "$RUNNER_TEMP/gradle-build.log"; } | while IFS= read -r line; do
+            { grep -E 'FAILURE:|What went wrong:|Execution failed for task|^e: |error:|Could not resolve|Could not find|Unsupported' "$build_log" | tail -n 30 || true; awk '/What went wrong:/{for(i=0;i<12;i++){print; if(getline<=0)exit}}' "$build_log"; tail -n 20 "$build_log"; } | while IFS= read -r line; do
               echo "::error title=Gradle build::$line"
               echo "- $line" >> "$GITHUB_STEP_SUMMARY"
             done
