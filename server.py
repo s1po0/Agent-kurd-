@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import base64
 import os
 import re
 import shutil
@@ -33,6 +34,12 @@ AGENT_TOOLS = [
     {"type": "function", "function": {"name": "github_list_repositories", "description": "List the connected user's most recently updated GitHub repositories.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "github_search_repositories", "description": "Search repositories on GitHub by keywords. This is read-only.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "A short GitHub repository search query"}}, "required": ["query"]}}},
     {"type": "function", "function": {"name": "github_repository_info", "description": "Get public metadata for a GitHub repository using owner/name.", "parameters": {"type": "object", "properties": {"full_name": {"type": "string", "description": "Repository in owner/name form"}}, "required": ["full_name"]}}},
+    {"type": "function", "function": {"name": "github_read_file", "description": "Read a text file from a connected GitHub repository branch.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}, "path": {"type": "string"}, "branch": {"type": "string"}}, "required": ["repo", "path"]}}},
+    {"type": "function", "function": {"name": "github_create_branch", "description": "Create a new non-default feature branch from the repository's default branch. Only do this when the user explicitly asks for repository changes.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}, "branch": {"type": "string"}}, "required": ["repo", "branch"]}}},
+    {"type": "function", "function": {"name": "github_commit_file", "description": "Create or update one text file on an existing non-default feature branch. This creates a Git commit. Use only for a change explicitly requested by the user; never write to the default branch or merge a pull request.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}, "branch": {"type": "string"}, "path": {"type": "string"}, "content": {"type": "string"}, "message": {"type": "string"}}, "required": ["repo", "branch", "path", "content", "message"]}}},
+    {"type": "function", "function": {"name": "github_create_pull_request", "description": "Open a pull request from a feature branch to the repository default branch. Only do this when explicitly requested; never merge it.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}, "head": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}, "required": ["repo", "head", "title"]}}},
+    {"type": "function", "function": {"name": "github_list_workflows", "description": "List GitHub Actions workflows in a repository.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}}, "required": ["repo"]}}},
+    {"type": "function", "function": {"name": "github_run_workflow", "description": "Dispatch a workflow that supports workflow_dispatch. Use only when the user explicitly asks to run it. This starts a workflow run and does not change source code.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}, "workflow": {"type": "string"}, "ref": {"type": "string"}, "inputs": {"type": "object", "additionalProperties": {"type": "string"}}}, "required": ["repo", "workflow", "ref"]}}},
 ]
 
 
@@ -239,11 +246,42 @@ class Handler(BaseHTTPRequestHandler):
         data = request_json(api_base + "/models", headers=headers, timeout=8)
         return [m.get("id") for m in data.get("data", []) if m.get("id")]
 
-    def github_api(self, endpoint):
+    def github_api(self, endpoint, method="GET", data=None):
         token = secrets_data().get("github_token")
         if not token:
             raise ValueError("Connect GitHub first to use GitHub agent tools.")
-        return request_json("https://api.github.com" + endpoint, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "KurdAgent"}, timeout=20)
+        return request_json("https://api.github.com" + endpoint, method=method, data=data, headers={
+            "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "KurdAgent"}, timeout=30)
+
+    @staticmethod
+    def validate_repo_name(repo):
+        repo = str(repo or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", repo):
+            raise ValueError("Use a GitHub repository name in owner/repository form.")
+        return repo
+
+    @staticmethod
+    def validate_git_ref(ref):
+        ref = str(ref or "").strip()
+        invalid = (not ref or len(ref) > 180 or ref.startswith("/") or ref.endswith("/") or
+                   "//" in ref or ".." in ref or "@{" in ref or any(c in ref for c in " ~^:?*[]\\\\"))
+        parts = ref.split("/")
+        if invalid or any(not part or part.startswith(".") or part.endswith(".") or part.endswith(".lock") for part in parts):
+            raise ValueError("Use a valid Git branch or ref name.")
+        return ref
+
+    @staticmethod
+    def validate_repo_path(path):
+        path = str(path or "").strip()
+        if (not path or len(path) > 500 or path.startswith("/") or "\\" in path or
+                any(ord(c) < 32 for c in path) or any(part in ("", ".", "..") for part in path.split("/"))):
+            raise ValueError("Use a valid repository-relative file path.")
+        return path
+
+    def github_repo_details(self, repo):
+        repo = self.validate_repo_name(repo)
+        return self.github_api("/repos/" + urllib.parse.quote(repo, safe="/"))
 
     def execute_agent_tool(self, name, arguments):
         if name == "github_list_repositories":
@@ -256,11 +294,80 @@ class Handler(BaseHTTPRequestHandler):
             data = self.github_api("/search/repositories?" + urllib.parse.urlencode({"q": query, "sort": "stars", "per_page": 6}))
             return [{"name": r.get("full_name"), "description": r.get("description"), "url": r.get("html_url"), "stars": r.get("stargazers_count", 0)} for r in data.get("items", [])]
         if name == "github_repository_info":
-            full_name = str(arguments.get("full_name", "")).strip()
-            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", full_name):
-                raise ValueError("Use repository format owner/name.")
-            data = self.github_api("/repos/" + urllib.parse.quote(full_name, safe="/"))
+            full_name = self.validate_repo_name(arguments.get("full_name"))
+            data = self.github_repo_details(full_name)
             return {key: data.get(key) for key in ("full_name", "description", "html_url", "default_branch", "language", "stargazers_count", "forks_count", "open_issues_count", "private", "license")}
+        if name == "github_read_file":
+            repo = self.validate_repo_name(arguments.get("repo")); path = self.validate_repo_path(arguments.get("path"))
+            branch = self.validate_git_ref(arguments.get("branch")) if arguments.get("branch") else self.github_repo_details(repo).get("default_branch")
+            item = self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/contents/{urllib.parse.quote(path, safe='/')}?ref={urllib.parse.quote(branch, safe='')}")
+            if item.get("type") != "file" or item.get("encoding") != "base64":
+                raise ValueError("That path is not a readable text file.")
+            raw = base64.b64decode(item.get("content", ""))
+            text = raw.decode("utf-8", errors="replace")
+            return {"repo": repo, "path": path, "branch": branch, "sha": item.get("sha"), "content": text[:24000], "truncated": len(text) > 24000}
+        if name == "github_create_branch":
+            repo = self.validate_repo_name(arguments.get("repo")); branch = self.validate_git_ref(arguments.get("branch"))
+            details = self.github_repo_details(repo); default_branch = details.get("default_branch")
+            if branch == default_branch:
+                raise ValueError("Choose a new feature branch; the default branch cannot be overwritten.")
+            head = self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/git/ref/heads/{urllib.parse.quote(default_branch, safe='/')}")
+            created = self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/git/refs", method="POST",
+                                      data={"ref": "refs/heads/" + branch, "sha": head["object"]["sha"]})
+            return {"created": created.get("ref"), "sha": created.get("object", {}).get("sha"), "base": default_branch}
+        if name == "github_commit_file":
+            repo = self.validate_repo_name(arguments.get("repo")); branch = self.validate_git_ref(arguments.get("branch")); path = self.validate_repo_path(arguments.get("path"))
+            details = self.github_repo_details(repo)
+            if branch == details.get("default_branch"):
+                raise ValueError("Direct commits to the default branch are blocked. Create a feature branch first.")
+            content = str(arguments.get("content", ""))
+            message = str(arguments.get("message", "")).strip()
+            if len(content.encode("utf-8")) > 100_000 or not message or len(message) > 200:
+                raise ValueError("File content must be under 100 KB and the commit message under 200 characters.")
+            ref = urllib.parse.quote(branch, safe="/")
+            self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/git/ref/heads/{ref}")
+            url = f"/repos/{urllib.parse.quote(repo, safe='/')}/contents/{urllib.parse.quote(path, safe='/')}?ref={urllib.parse.quote(branch, safe='')}"
+            try:
+                existing = self.github_api(url)
+                sha = existing.get("sha")
+            except urllib.error.HTTPError as exc:
+                if exc.code != 404:
+                    raise
+                sha = None
+            payload = {"message": message, "content": base64.b64encode(content.encode("utf-8")).decode("ascii"), "branch": branch}
+            if sha:
+                payload["sha"] = sha
+            result = self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/contents/{urllib.parse.quote(path, safe='/')}", method="PUT", data=payload)
+            commit = result.get("commit", {})
+            return {"committed": True, "repo": repo, "branch": branch, "path": path,
+                    "commit": commit.get("sha"), "url": commit.get("html_url")}
+        if name == "github_create_pull_request":
+            repo = self.validate_repo_name(arguments.get("repo")); head = self.validate_git_ref(arguments.get("head"))
+            details = self.github_repo_details(repo); base = details.get("default_branch")
+            if head == base:
+                raise ValueError("The pull request head must be a feature branch, not the default branch.")
+            title = str(arguments.get("title", "")).strip()[:200]
+            body = str(arguments.get("body", ""))[:5000]
+            if not title:
+                raise ValueError("A pull request title is required.")
+            pr = self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/pulls", method="POST",
+                                 data={"title": title, "head": head, "base": base, "body": body})
+            return {"number": pr.get("number"), "url": pr.get("html_url"), "state": pr.get("state"), "merged": False}
+        if name == "github_list_workflows":
+            repo = self.validate_repo_name(arguments.get("repo"))
+            data = self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/actions/workflows?per_page=100")
+            return [{"id": w.get("id"), "name": w.get("name"), "path": w.get("path"), "state": w.get("state"), "url": w.get("html_url")}
+                    for w in data.get("workflows", [])]
+        if name == "github_run_workflow":
+            repo = self.validate_repo_name(arguments.get("repo")); workflow = str(arguments.get("workflow", "")).strip()
+            ref = self.validate_git_ref(arguments.get("ref")); inputs = arguments.get("inputs") or {}
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}(?:\.ya?ml)?", workflow):
+                raise ValueError("Use a workflow ID or YAML filename.")
+            if not isinstance(inputs, dict) or len(inputs) > 20 or any(not isinstance(k, str) or not isinstance(v, str) or len(k) > 100 or len(v) > 1000 for k, v in inputs.items()):
+                raise ValueError("Workflow inputs must be at most 20 short string values.")
+            result = self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/actions/workflows/{urllib.parse.quote(workflow, safe='')}/dispatches",
+                                     method="POST", data={"ref": ref, "inputs": inputs})
+            return {"dispatched": True, "repo": repo, "workflow": workflow, "ref": ref, "result": result or "GitHub accepted the workflow dispatch."}
         raise ValueError("This agent tool is not allowed.")
 
     def chat_with_tools(self, cfg, messages):
@@ -439,7 +546,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError(f"چوونەژوورەوەی {label} هێشتا لەم build ـەدا ڕێکنەخراوە؛ OAuth Client ID پێویستە.")
         if provider == "github":
             payload = request_form_json("https://github.com/login/device/code", {
-                "client_id": client_id, "scope": "repo read:user"}, timeout=20)
+                "client_id": client_id, "scope": "repo workflow read:user"}, timeout=20)
         else:
             payload = request_form_json("https://huggingface.co/oauth/device", {
                 "client_id": client_id, "scope": "openid profile read-repos gated-repos"}, timeout=20)
@@ -556,19 +663,6 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Invalid sign-in session.")
                 self.send_json(200, self.poll_device_oauth(provider, job_id))
                 return
-            if path == "/api/huggingface/connect":
-                token = str(data.get("token", "")).strip()
-                if not token or len(token) > 1000:
-                    raise ValueError("Enter a Hugging Face user access token.")
-                user = request_json("https://huggingface.co/api/whoami-v2", headers={
-                    "Authorization": f"Bearer {token}", "User-Agent": "KurdAgent/0.1"}, timeout=20)
-                with LOCK:
-                    saved = secrets_data()
-                    saved["hf_token"] = token
-                    saved["hf_username"] = user.get("name") or user.get("fullname") or "Hugging Face user"
-                    write_json_private(SECRETS_PATH, saved)
-                self.send_json(200, {"ok": True, "username": user.get("name") or user.get("fullname") or "Hugging Face user"})
-                return
             if path == "/api/local-ai/download":
                 repo = str(data.get("repo", "")).strip()
                 filename = str(data.get("filename", "")).strip()
@@ -607,19 +701,6 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Invalid Hugging Face GGUF model reference.")
                 job_id = self.start_hf_pull(model_name, cfg["base_url"])
                 self.send_json(202, {"job_id": job_id, "model": model_name})
-                return
-            if path == "/api/github/connect":
-                token = str(data.get("token", "")).strip()
-                if not token or len(token) > 500:
-                    raise ValueError("Enter a valid GitHub personal access token")
-                user = request_json("https://api.github.com/user", headers={"Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json", "User-Agent": "KurdAgent", "X-GitHub-Api-Version": "2022-11-28"}, timeout=15)
-                with LOCK:
-                    saved = secrets_data()
-                    saved["github_token"] = token
-                    saved["github_username"] = user.get("login", "GitHub user")
-                    write_json_private(SECRETS_PATH, saved)
-                self.send_json(200, {"ok": True, "login": user.get("login", "GitHub user")})
                 return
             self.send_json(404, {"error": "Unknown API endpoint"})
         except urllib.error.HTTPError as exc:
