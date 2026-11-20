@@ -145,6 +145,33 @@ class ApiTest(unittest.TestCase):
         status, error = self.call_api("/api/models/pull", {"repo": "../../bad", "quant": "Q4_K_M"})
         self.assertEqual(status, 400)
 
+    def test_chat_context_applies_selected_repository_branch_and_thinking(self):
+        self.config.write_text(json.dumps({"provider": "ollama", "base_url": "http://127.0.0.1:11434", "model": "test-model"}))
+        first = {"message": {"role": "assistant", "tool_calls": [{"function": {"name": "github_read_file", "arguments": {"path": "README.md"}}}]}}
+        final = {"message": {"role": "assistant", "content": "Read the file from the selected branch."}}
+        with (
+            patch.object(server, "secrets_data", return_value={"github_token": "test-token", "github_auth_type": "github_app"}),
+            patch.object(server.Handler, "execute_agent_tool", return_value={"content": "ok"}) as execute,
+            patch.object(server, "request_json", side_effect=[first, final]) as request,
+        ):
+            status, result = self.call_api("/api/chat", {
+                "messages": [{"role": "system", "content": "system"}, {"role": "user", "content": "Read README"}],
+                "context": {"repo": "owner/project", "branch": "feature/docs", "thinking": True}})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["reply"], "Read the file from the selected branch.")
+        self.assertEqual(execute.call_args.args[1], {"path": "README.md", "repo": "owner/project", "branch": "feature/docs"})
+        sent = request.call_args_list[0].kwargs["data"]
+        self.assertTrue(sent["think"])
+        self.assertIn("owner/project", sent["messages"][1]["content"])
+        self.assertIn("feature/docs", sent["messages"][1]["content"])
+
+    def test_github_branch_picker_returns_branch_names(self):
+        with patch.object(server.Handler, "github_api", return_value=[{"name": "main"}, {"name": "feature/x"}]) as api:
+            status, result = self.call_api("/api/github/branches?repo=owner/project")
+        self.assertEqual(status, 200)
+        self.assertEqual([item["name"] for item in result["branches"]], ["main", "feature/x"])
+        self.assertIn("/repos/owner/project/branches?per_page=100", api.call_args.args[0])
+
     def test_agent_uses_connected_read_only_github_tools(self):
         self.config.write_text(json.dumps({"provider": "ollama", "base_url": "http://127.0.0.1:11434", "model": "tool-model"}))
         first = {"message": {"role": "assistant", "tool_calls": [{"function": {"name": "github_list_repositories", "arguments": {}}}]}}

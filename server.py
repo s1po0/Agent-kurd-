@@ -39,7 +39,7 @@ AGENT_TOOLS = [
     {"type": "function", "function": {"name": "github_search_repositories", "description": "Search repositories on GitHub by keywords. This is read-only.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "A short GitHub repository search query"}}, "required": ["query"]}}},
     {"type": "function", "function": {"name": "github_repository_info", "description": "Get public metadata for a GitHub repository using owner/name.", "parameters": {"type": "object", "properties": {"full_name": {"type": "string", "description": "Repository in owner/name form"}}, "required": ["full_name"]}}},
     {"type": "function", "function": {"name": "github_read_file", "description": "Read a text file from a connected GitHub repository branch.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}, "path": {"type": "string"}, "branch": {"type": "string"}}, "required": ["repo", "path"]}}},
-    {"type": "function", "function": {"name": "github_create_branch", "description": "Create a new non-default feature branch from the repository's default branch. Only do this when the user explicitly asks for repository changes.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}, "branch": {"type": "string"}}, "required": ["repo", "branch"]}}},
+    {"type": "function", "function": {"name": "github_create_branch", "description": "Create a new non-default feature branch from the selected base branch (or default branch). Only do this when the user explicitly asks for repository changes.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}, "branch": {"type": "string"}, "base_branch": {"type": "string"}}, "required": ["repo", "branch"]}}},
     {"type": "function", "function": {"name": "github_commit_file", "description": "Create or update one text file on an existing non-default feature branch. This creates a Git commit. Use only for a change explicitly requested by the user; never write to the default branch or merge a pull request.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}, "branch": {"type": "string"}, "path": {"type": "string"}, "content": {"type": "string"}, "message": {"type": "string"}}, "required": ["repo", "branch", "path", "content", "message"]}}},
     {"type": "function", "function": {"name": "github_create_pull_request", "description": "Open a pull request from a feature branch to the repository default branch. Only do this when explicitly requested; never merge it.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}, "head": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}, "required": ["repo", "head", "title"]}}},
     {"type": "function", "function": {"name": "github_list_workflows", "description": "List GitHub Actions workflows in a repository.", "parameters": {"type": "object", "properties": {"repo": {"type": "string"}}, "required": ["repo"]}}},
@@ -389,6 +389,17 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json(502, {"error": str(exc), "models": []})
             return
+        if path == "/api/github/branches":
+            query = urllib.parse.parse_qs(parsed.query)
+            repo = (query.get("repo", [""])[0]).strip()
+            try:
+                repo = self.validate_repo_name(repo)
+                data = self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/branches?per_page=100")
+                branches = [{"name": item.get("name")} for item in data if isinstance(item, dict) and item.get("name")]
+                self.send_json(200, {"branches": branches})
+            except Exception as exc:
+                self.send_json(400, {"error": str(exc) or "Could not load branches."})
+            return
         if path == "/api/github/repos":
             github_secret = github_app_secret_data()
             token = github_secret.get("github_token") if github_secret.get("github_auth_type") == "github_app" else None
@@ -396,8 +407,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(401, {"error": "GitHub is not connected yet."})
                 return
             try:
-                data = self.github_api("/user/repos?sort=updated&per_page=20")
-                self.send_json(200, {"repos": [{"name": r.get("full_name"), "description": r.get("description"), "url": r.get("html_url"), "private": r.get("private"), "stars": r.get("stargazers_count", 0)} for r in data]})
+                data = self.github_api("/user/repos?sort=updated&per_page=100")
+                self.send_json(200, {"repos": [{"name": r.get("full_name"), "description": r.get("description"), "url": r.get("html_url"), "private": r.get("private"), "stars": r.get("stargazers_count", 0), "default_branch": r.get("default_branch")} for r in data]})
             except Exception as exc:
                 self.send_json(502, {"error": f"Could not load repositories: {exc}"})
             return
@@ -513,12 +524,13 @@ class Handler(BaseHTTPRequestHandler):
         if name == "github_create_branch":
             repo = self.validate_repo_name(arguments.get("repo")); branch = self.validate_git_ref(arguments.get("branch"))
             details = self.github_repo_details(repo); default_branch = details.get("default_branch")
+            base_branch = self.validate_git_ref(arguments.get("base_branch") or default_branch)
             if branch == default_branch:
                 raise ValueError("Choose a new feature branch; the default branch cannot be overwritten.")
-            head = self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/git/ref/heads/{urllib.parse.quote(default_branch, safe='/')}")
+            head = self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/git/ref/heads/{urllib.parse.quote(base_branch, safe='/')}")
             created = self.github_api(f"/repos/{urllib.parse.quote(repo, safe='/')}/git/refs", method="POST",
                                       data={"ref": "refs/heads/" + branch, "sha": head["object"]["sha"]})
-            return {"created": created.get("ref"), "sha": created.get("object", {}).get("sha"), "base": default_branch}
+            return {"created": created.get("ref"), "sha": created.get("object", {}).get("sha"), "base": base_branch}
         if name == "github_commit_file":
             repo = self.validate_repo_name(arguments.get("repo")); branch = self.validate_git_ref(arguments.get("branch")); path = self.validate_repo_path(arguments.get("path"))
             details = self.github_repo_details(repo)
@@ -574,8 +586,22 @@ class Handler(BaseHTTPRequestHandler):
             return {"dispatched": True, "repo": repo, "workflow": workflow, "ref": ref, "result": result or "GitHub accepted the workflow dispatch."}
         raise ValueError("This agent tool is not allowed.")
 
-    def chat_with_tools(self, cfg, messages):
+    def chat_with_tools(self, cfg, messages, context=None):
         messages = list(messages)
+        context = context or {}
+        selected_repo = str(context.get("repo") or "")
+        selected_branch = str(context.get("branch") or "")
+        thinking = bool(context.get("thinking"))
+        guidance = []
+        if selected_repo:
+            guidance.append(f"The user selected GitHub repository {selected_repo}. Use it as the default repository for GitHub tools unless the user names another.")
+        if selected_branch:
+            guidance.append(f"The selected Git branch is {selected_branch}. Use it by default for reading files and workflow refs, and as the base branch when creating a feature branch. Never commit directly to the repository's default branch.")
+        if thinking:
+            guidance.append("Thinking mode is on: reason carefully and verify assumptions internally, but do not reveal private chain-of-thought; give a concise answer with conclusions and key steps.")
+        if guidance:
+            system_index = 1 if messages and messages[0].get("role") == "system" else 0
+            messages.insert(system_index, {"role": "system", "content": "Selected chat context: " + " ".join(guidance)})
         github_secret = github_app_secret_data()
         github_expiry = float(github_secret.get("github_token_expires_at") or 0)
         enabled = bool(github_secret.get("github_token") and github_secret.get("github_auth_type") == "github_app" and (not github_expiry or github_expiry > time.time()))
@@ -585,6 +611,8 @@ class Handler(BaseHTTPRequestHandler):
             if cfg["provider"] == "ollama":
                 body = {"model": cfg["model"], "messages": messages, "stream": False,
                         "options": {"temperature": cfg.get("temperature", 0.7)}}
+                if thinking:
+                    body["think"] = True
                 if tools:
                     body["tools"] = tools
                 result = request_json(safe_url(cfg["base_url"]) + "/api/chat", method="POST", data=body, timeout=300)
@@ -611,8 +639,23 @@ class Handler(BaseHTTPRequestHandler):
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {}
+                args = dict(args) if isinstance(args, dict) else {}
+                if selected_repo:
+                    if name == "github_repository_info":
+                        args.setdefault("full_name", selected_repo)
+                    elif name not in ("github_search_repositories", "github_list_repositories"):
+                        args.setdefault("repo", selected_repo)
+                if selected_branch:
+                    if name in ("github_read_file", "github_commit_file"):
+                        args.setdefault("branch", selected_branch)
+                    elif name == "github_create_branch":
+                        args.setdefault("base_branch", selected_branch)
+                    elif name == "github_run_workflow":
+                        args.setdefault("ref", selected_branch)
+                    elif name == "github_create_pull_request":
+                        args.setdefault("head", selected_branch)
                 try:
-                    output = self.execute_agent_tool(name, args if isinstance(args, dict) else {})
+                    output = self.execute_agent_tool(name, args)
                 except Exception as exc:
                     output = {"error": str(exc)}
                 used.append(name)
@@ -908,7 +951,13 @@ class Handler(BaseHTTPRequestHandler):
                             if isinstance(m, dict) and m.get("role") in ("system", "user", "assistant")]
                 if not cfg.get("model"):
                     raise ValueError("Choose a model in Settings first")
-                answer, tools_used = self.chat_with_tools(cfg, messages)
+                context_data = data.get("context") if isinstance(data.get("context"), dict) else {}
+                context = {
+                    "repo": self.validate_repo_name(context_data["repo"]) if context_data.get("repo") else "",
+                    "branch": self.validate_git_ref(context_data["branch"]) if context_data.get("branch") else "",
+                    "thinking": bool(context_data.get("thinking")),
+                }
+                answer, tools_used = self.chat_with_tools(cfg, messages, context)
                 self.send_json(200, {"reply": answer, "tools_used": tools_used})
                 return
             if path == "/api/models/pull":

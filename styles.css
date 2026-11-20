@@ -6,3 +6,10 @@
 .hf-card[hidden]{display:none!important}
 .oauth-device-panel{margin-top:12px;padding:12px;border:1px solid #314436;background:#101a15;border-radius:8px}.oauth-device-instructions{color:#a9e5bf;font-size:10px;line-height:1.7}.oauth-user-code{margin:11px 0;font:700 24px var(--latin);letter-spacing:3px;direction:ltr;text-align:left;color:#effff2;user-select:all}.oauth-open{margin-top:3px}.integration-main>.primary-button[hidden],.oauth-device-panel[hidden]{display:none!important}
 .primary-button:disabled{opacity:.45;cursor:not-allowed}.integration-main>.primary-button[hidden],.integration-main>a.primary-button[hidden],.oauth-device-panel[hidden]{display:none!important}
+
+.chat-context-bar{display:flex;gap:7px;align-items:center;margin-bottom:8px;min-width:0}.chat-context-bar select{height:32px;min-width:0;flex:1;background:#0a0f15;border:1px solid #29343e;border-radius:7px;padding:0 8px;color:#cbd5d5;font-size:10px;direction:ltr;text-align:left}.chat-context-bar select:disabled{opacity:.55}.thinking-toggle{height:32px;flex:none;border:1px solid #29343e;border-radius:7px;background:#141c23;color:#9aa7aa;padding:0 10px;font-size:10px;cursor:pointer}.thinking-toggle[aria-pressed="true"]{border-color:#52765f;background:#193328;color:#b9edc6}.thinking-toggle span{margin-left:4px;color:#8b999c}.thinking-toggle[aria-pressed="true"] span{color:#a9e5bf}
+@media(max-width:560px){.chat-context-bar{gap:5px}.chat-context-bar select{font-size:9px;padding:0 5px}.thinking-toggle{font-size:9px;padding:0 7px}}
+.light-mode .chat-context-bar select{background:#f8faf8;color:#17231b;border-color:#d4ddd6}.light-mode .thinking-toggle{background:#f4f7f4;color:#526057;border-color:#d4ddd6}.light-mode .thinking-toggle[aria-pressed="true"]{background:#dff4e5;color:#174126;border-color:#8ab798}
+.context-refresh{height:32px;width:32px;flex:none;border:1px solid #29343e;border-radius:7px;background:#141c23;color:#a9e5bf;font-size:16px;cursor:pointer}.context-refresh:disabled{opacity:.5;cursor:wait}
+@media(max-width:560px){.context-refresh{height:30px;width:28px;font-size:14px}}
+.light-mode .context-refresh{background:#f4f7f4;color:#366345;border-color:#d4ddd6}

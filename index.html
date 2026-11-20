@@ -51,6 +51,12 @@
             </div>
             <div class="messages" id="messages" aria-live="polite"></div>
             <form class="composer" id="chatForm">
+              <div class="chat-context-bar">
+                <select id="chatRepo" aria-label="GitHub repository"><option value="">ڕێپۆ هەڵبژێرە</option></select>
+                <select id="chatBranch" aria-label="Git branch" disabled><option value="">لق</option></select>
+                <button type="button" class="context-refresh" id="refreshChatRepos" aria-label="Refresh repositories" title="Refresh">↻</button>
+                <button type="button" class="thinking-toggle" id="thinkingToggle" aria-pressed="false">Thinking <span>◉</span></button>
+              </div>
               <textarea id="promptInput" rows="1" placeholder="پەیامەکەت بنووسە..." aria-label="پەیامەکەت بنووسە"></textarea>
               <div class="composer-bottom"><div class="composer-hint"><span class="local-mini">◈</span> گفتوگۆ خۆجێییە <span class="hint-divider">·</span> <span id="currentModel">مۆدێل هەڵنەبژێردراوە</span></div><button class="send-button" id="sendButton" type="submit" aria-label="بنێرە">↑</button></div>
             </form>
