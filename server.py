@@ -269,7 +269,7 @@ class Handler(BaseHTTPRequestHandler):
             for key in ("github_token", "github_username", "github_refresh_token", "github_token_expires_at"):
                 saved.pop(key, None)
             write_json_private(SECRETS_PATH, saved)
-            raise ValueError("Previous broad OAuth connection was removed. Reconnect with the one-repository GitHub App.")
+            raise ValueError("Previous broad OAuth connection was removed. Reconnect with the GitHub App.")
         if not token:
             raise ValueError("Connect GitHub first to use GitHub agent tools.")
         expires_at = float(saved.get("github_token_expires_at") or 0)
@@ -577,7 +577,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError(f"چوونەژوورەوەی {label} لەم build ـەدا ڕێکنەخراوە؛ Client ID پێویستە.")
         if provider == "github":
             if not re.fullmatch(r"[A-Za-z0-9-]{1,100}", GITHUB_APP_SLUG):
-                raise ValueError("GitHub App slug is not configured; install Kurd Agent for one selected repository first.")
+                raise ValueError("GitHub App slug is not configured; install the Kurd Agent GitHub App first.")
             # GitHub App permissions and repository access come from the App installation, not OAuth scopes.
             payload = request_form_json("https://github.com/login/device/code", {
                 "client_id": client_id}, timeout=20)
