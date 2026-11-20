@@ -30,7 +30,13 @@ class LocalAiBridge(
         val allowedHttps = uri.scheme == "https" && uri.host in setOf("github.com", "huggingface.co")
         val allowedLocalSetup = uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == 8000 && uri.path == "/api/github/app-manifest/start-page"
         if (!allowedHttps && !allowedLocalSetup) return
-        try { activity.startActivity(Intent(Intent.ACTION_VIEW, uri)) } catch (_: Exception) { }
+        val keepAlive = Intent(activity, OAuthKeepAliveService::class.java)
+        try {
+            activity.startForegroundService(keepAlive)
+            activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
+        } catch (_: Exception) {
+            activity.stopService(keepAlive)
+        }
     }
 
     @JavascriptInterface

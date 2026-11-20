@@ -25,6 +25,11 @@ class MainActivity : Activity() {
     private lateinit var progress: ProgressBar
     private var localAiBridge: LocalAiBridge? = null
 
+    override fun onResume() {
+        super.onResume()
+        stopService(Intent(this, OAuthKeepAliveService::class.java))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
