@@ -9,6 +9,7 @@ import re
 import shutil
 import secrets
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,6 +22,11 @@ CONFIG_PATH = DATA_DIR / "settings.json"
 SECRETS_PATH = DATA_DIR / "secrets.json"
 LOCK = threading.Lock()
 PULL_JOBS = {}
+OAUTH_DEVICE_JOBS = {}
+OAUTH_CLIENT_IDS = {
+    "github": os.environ.get("KURD_AGENT_GITHUB_OAUTH_CLIENT_ID", ""),
+    "huggingface": os.environ.get("KURD_AGENT_HF_OAUTH_CLIENT_ID", ""),
+}
 DEFAULTS = {"provider": "ollama", "base_url": "http://127.0.0.1:11434", "model": "", "temperature": 0.7}
 HF_REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,120}")
 AGENT_TOOLS = [
@@ -79,6 +85,15 @@ def request_json(url, *, method="GET", data=None, headers=None, timeout=90):
         return json.loads(raw) if raw else {}
 
 
+def request_form_json(url, data, *, headers=None, timeout=30):
+    body = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json", **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        raw = response.read()
+        return json.loads(raw) if raw else {}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "KurdAgent/0.1"
 
@@ -101,12 +116,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
+        if path == "/api/oauth/config":
+            self.send_json(200, {"github_ready": bool(OAUTH_CLIENT_IDS.get("github")),
+                                 "huggingface_ready": bool(OAUTH_CLIENT_IDS.get("huggingface"))})
+            return
         if path == "/api/local-ai/status":
             cfg = read_json(CONFIG_PATH, {})
             local = cfg.get("local_model") or {}
             model_path = DATA_DIR / "models" / str(local.get("local_filename", "")) if local.get("local_filename") else None
-            hf_token = secrets_data().get("hf_token")
+            secret = secrets_data()
+            hf_token = secret.get("hf_token")
             self.send_json(200, {"provider": cfg.get("provider", "ollama"), "has_hf_token": bool(hf_token),
+                                 "hf_username": secret.get("hf_username", ""),
                                  "model_ready": bool(model_path and model_path.is_file()),
                                  "repo": local.get("repo", ""), "filename": local.get("filename", ""),
                                  "model_path": str(model_path) if model_path and model_path.is_file() else ""})
@@ -152,7 +173,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "github_connected": github})
             return
         if path == "/api/github/state":
-            self.send_json(200, {"connected": bool(secrets_data().get("github_token"))})
+            secret = secrets_data()
+            self.send_json(200, {"connected": bool(secret.get("github_token")), "username": secret.get("github_username", "")})
             return
         if path == "/api/huggingface/search":
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("q", [""])[0].strip()[:100]
@@ -410,6 +432,85 @@ class Handler(BaseHTTPRequestHandler):
                 if job_id in PULL_JOBS:
                     PULL_JOBS[job_id].update({"state": "error", "error": str(exc), "status": "Download failed"})
 
+    def start_device_oauth(self, provider):
+        client_id = OAUTH_CLIENT_IDS.get(provider, "")
+        if not client_id:
+            label = "GitHub" if provider == "github" else "Hugging Face"
+            raise ValueError(f"چوونەژوورەوەی {label} هێشتا لەم build ـەدا ڕێکنەخراوە؛ OAuth Client ID پێویستە.")
+        if provider == "github":
+            payload = request_form_json("https://github.com/login/device/code", {
+                "client_id": client_id, "scope": "repo read:user"}, timeout=20)
+        else:
+            payload = request_form_json("https://huggingface.co/oauth/device", {
+                "client_id": client_id, "scope": "openid profile read-repos gated-repos"}, timeout=20)
+        if payload.get("error") or not payload.get("device_code") or not payload.get("user_code"):
+            raise ValueError(payload.get("error_description") or payload.get("error") or "OAuth device sign-in could not start.")
+        job_id = secrets.token_urlsafe(18)
+        interval = max(5 if provider == "github" else 2, int(payload.get("interval", 5)))
+        expires_in = max(60, min(1800, int(payload.get("expires_in", 900))))
+        with LOCK:
+            OAUTH_DEVICE_JOBS[job_id] = {"provider": provider, "client_id": client_id,
+                "device_code": payload["device_code"], "interval": interval,
+                "expires_at": time.time() + expires_in}
+        return {"job_id": job_id, "user_code": payload["user_code"],
+                "verification_uri": payload.get("verification_uri") or ("https://github.com/login/device" if provider == "github" else "https://huggingface.co/oauth/device"),
+                "expires_in": expires_in, "interval": interval}
+
+    def poll_device_oauth(self, provider, job_id):
+        with LOCK:
+            job = OAUTH_DEVICE_JOBS.get(job_id)
+            if not job or job.get("provider") != provider:
+                raise ValueError("Sign-in session expired. Start sign-in again.")
+            if time.time() >= job["expires_at"]:
+                OAUTH_DEVICE_JOBS.pop(job_id, None)
+                raise ValueError("The sign-in code expired. Start again.")
+            snapshot = job.copy()
+        if provider == "github":
+            result = request_form_json("https://github.com/login/oauth/access_token", {
+                "client_id": snapshot["client_id"], "device_code": snapshot["device_code"],
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code"}, timeout=20)
+        else:
+            result = request_form_json("https://huggingface.co/oauth/token", {
+                "client_id": snapshot["client_id"], "device_code": snapshot["device_code"],
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code"}, timeout=20)
+        error = result.get("error")
+        if error == "authorization_pending":
+            return {"pending": True, "interval": snapshot["interval"]}
+        if error == "slow_down":
+            with LOCK:
+                if job_id in OAUTH_DEVICE_JOBS:
+                    OAUTH_DEVICE_JOBS[job_id]["interval"] += 5
+                    snapshot["interval"] = OAUTH_DEVICE_JOBS[job_id]["interval"]
+            return {"pending": True, "interval": snapshot["interval"]}
+        if error:
+            with LOCK:
+                OAUTH_DEVICE_JOBS.pop(job_id, None)
+            raise ValueError(result.get("error_description") or f"Sign-in was not completed ({error}).")
+        access_token = result.get("access_token")
+        if not access_token:
+            return {"pending": True, "interval": snapshot["interval"]}
+        if provider == "github":
+            user = request_json("https://api.github.com/user", headers={
+                "Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "KurdAgent"}, timeout=20)
+            username = user.get("login") or "GitHub user"
+            token_key, user_key = "github_token", "github_username"
+        else:
+            user = request_json("https://huggingface.co/oauth/userinfo", headers={
+                "Authorization": f"Bearer {access_token}", "User-Agent": "KurdAgent/0.1"}, timeout=20)
+            username = user.get("preferred_username") or user.get("name") or "Hugging Face user"
+            token_key, user_key = "hf_token", "hf_username"
+        with LOCK:
+            saved = secrets_data()
+            saved[token_key] = access_token
+            saved[user_key] = username
+            if provider == "huggingface" and result.get("refresh_token"):
+                saved["hf_refresh_token"] = result["refresh_token"]
+                saved["hf_token_expires_at"] = time.time() + int(result.get("expires_in", 0)) if result.get("expires_in") else 0
+            write_json_private(SECRETS_PATH, saved)
+            OAUTH_DEVICE_JOBS.pop(job_id, None)
+        return {"pending": False, "connected": True, "username": username}
+
     def same_origin(self):
         origin = self.headers.get("Origin")
         if not origin:
@@ -442,6 +543,19 @@ class Handler(BaseHTTPRequestHandler):
                 write_json_private(CONFIG_PATH, cfg)
                 self.send_json(200, {"ok": True, "settings": settings(), "has_api_key": bool(cfg.get("api_key"))})
                 return
+            if path == "/api/oauth/device/start":
+                provider = str(data.get("provider", ""))
+                if provider not in ("github", "huggingface"):
+                    raise ValueError("Unknown sign-in provider.")
+                self.send_json(200, self.start_device_oauth(provider))
+                return
+            if path == "/api/oauth/device/poll":
+                provider = str(data.get("provider", ""))
+                job_id = str(data.get("job_id", ""))
+                if provider not in ("github", "huggingface") or not job_id:
+                    raise ValueError("Invalid sign-in session.")
+                self.send_json(200, self.poll_device_oauth(provider, job_id))
+                return
             if path == "/api/huggingface/connect":
                 token = str(data.get("token", "")).strip()
                 if not token or len(token) > 1000:
@@ -451,6 +565,7 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:
                     saved = secrets_data()
                     saved["hf_token"] = token
+                    saved["hf_username"] = user.get("name") or user.get("fullname") or "Hugging Face user"
                     write_json_private(SECRETS_PATH, saved)
                 self.send_json(200, {"ok": True, "username": user.get("name") or user.get("fullname") or "Hugging Face user"})
                 return
@@ -502,6 +617,7 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:
                     saved = secrets_data()
                     saved["github_token"] = token
+                    saved["github_username"] = user.get("login", "GitHub user")
                     write_json_private(SECRETS_PATH, saved)
                 self.send_json(200, {"ok": True, "login": user.get("login", "GitHub user")})
                 return
@@ -534,7 +650,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "Unknown API endpoint"})
             return
         saved = secrets_data()
-        saved.pop("github_token" if path == "/api/github/connect" else "hf_token", None)
+        keys = ("github_token", "github_username") if path == "/api/github/connect" else (
+            "hf_token", "hf_username", "hf_refresh_token", "hf_token_expires_at")
+        for key in keys:
+            saved.pop(key, None)
         write_json_private(SECRETS_PATH, saved)
         self.send_json(200, {"ok": True})
 

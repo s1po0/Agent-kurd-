@@ -1,5 +1,8 @@
 package com.kurdagent.app
 
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import com.thalzeronlabs.llama.ChatMessage
@@ -13,12 +16,20 @@ import java.util.concurrent.Executors
 
 /** JavaScript bridge for genuine on-device GGUF inference. Model files remain in app-private storage. */
 class LocalAiBridge(
+    private val activity: Activity,
     private val webView: WebView,
     private val modelDirectory: File,
 ) {
     private val worker = Executors.newSingleThreadExecutor()
     @Volatile private var model: LlamaModel? = null
     @Volatile private var loadedPath: String? = null
+
+    @JavascriptInterface
+    fun openVerificationUrl(url: String) {
+        val uri = Uri.parse(url)
+        if (uri.scheme != "https" || uri.host !in setOf("github.com", "huggingface.co")) return
+        try { activity.startActivity(Intent(Intent.ACTION_VIEW, uri)) } catch (_: Exception) { }
+    }
 
     @JavascriptInterface
     fun loadModel(path: String, callbackId: String) {

@@ -15,7 +15,7 @@ gradle --no-daemon :app:assembleDebug
 
 The installable APK is produced at `app/build/outputs/apk/debug/app-debug.apk`. The AAR is downloaded at build time rather than checked into Git. The upstream library is Apache-2.0 licensed and includes its third-party notices in the APK.
 
-A GitHub Actions workflow builds the APK and publishes it as the `Kurd-Agent-Android-APK` artifact on pushes to the project branch or by manual dispatch.
+A GitHub Actions workflow builds the APK and publishes it as the `Kurd-Agent-Android-APK` artifact on pushes to the project branch or by manual dispatch. Browser-based GitHub and Hugging Face sign-in uses public OAuth client IDs supplied as repository Actions variables: `KURD_AGENT_GITHUB_OAUTH_CLIENT_ID` and `KURD_AGENT_HF_OAUTH_CLIENT_ID`. Create a GitHub OAuth App at `https://github.com/settings/developers` and enable its device flow; create a public/no-secret Hugging Face OAuth app at `https://huggingface.co/settings/applications/new` with `openid`, `profile`, `read-repos`, and `gated-repos` scopes. Add the two **client IDs** (not secrets or access tokens) under repository Settings → Secrets and variables → Actions → Variables, then trigger an Android-source build so the IDs are included. Users authorize in the official provider browser pages and never paste a token. The app requests GitHub `repo`/`read:user` scope (GitHub bundles repository write permission into `repo`, though this app's implemented GitHub actions are read-only) and Hugging Face `read-repos`/`gated-repos` for account/model access.
 
 ## Use Hugging Face and offline local AI
 

@@ -67,11 +67,13 @@ class MainActivity : Activity() {
 
         try {
             val modelDirectory = File(filesDir, "kurd-agent/data/models").apply { mkdirs() }
-            localAiBridge = LocalAiBridge(webView, modelDirectory)
+            localAiBridge = LocalAiBridge(this, webView, modelDirectory)
             webView.addJavascriptInterface(localAiBridge!!, "KurdLocalAI")
             copyWebAssets()
             if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
-            Python.getInstance().getModule("android_server").callAttr("start_server", filesDir.absolutePath)
+            Python.getInstance().getModule("android_server").callAttr(
+                "start_server", filesDir.absolutePath, BuildConfig.GITHUB_OAUTH_CLIENT_ID, BuildConfig.HF_OAUTH_CLIENT_ID
+            )
             webView.postDelayed({ webView.loadUrl("http://127.0.0.1:8000/") }, 250)
         } catch (error: Exception) {
             Toast.makeText(this, "Kurd Agent startup failed: ${error.message}", Toast.LENGTH_LONG).show()

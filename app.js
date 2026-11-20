@@ -30,7 +30,7 @@ function showPage(name) {
   Object.entries(pages).forEach(([key, node]) => node.classList.toggle('active', key === name));
   document.querySelectorAll('.nav-item').forEach(node => node.classList.toggle('active', node.dataset.page === name));
   $('#pageTitle').textContent = ({chat:'گفتوگۆ', connections:'پەیوەندییەکان', settings:'ڕێکخستن'})[name];
-  if (name === 'connections') refreshGithub();
+  if (name === 'connections') { refreshGithub(); refreshLocalAiStatus(); refreshOAuthConfig(); }
   if (name === 'settings') loadSettings();
 }
 document.querySelectorAll('.nav-item').forEach(node => node.addEventListener('click', () => showPage(node.dataset.page)));
@@ -105,7 +105,8 @@ function formatModelSize(bytes) {
 async function refreshLocalAiStatus() {
   try {
     const response = await fetch('/api/local-ai/status'); const state = await response.json();
-    $('#hfTokenSaved').hidden = !state.has_hf_token; $('#disconnectHf').hidden = !state.has_hf_token;
+    $('#hfTokenSaved').textContent = state.has_hf_token ? `پەیوەستە: ${state.hf_username || 'Hugging Face'}` : 'بۆ مۆدێلی گشتی login پێویست نییە';
+    setHuggingFaceConnected(state.has_hf_token, state.hf_username);
     $('#localHfRepo').value ||= state.repo || '';
     $('#localModelState').textContent = state.model_ready ? `ئامادەیە: ${state.filename}` : 'مۆدێل ئامادە نییە؛ GGUF دابەزێنە';
     if (state.model_ready && state.filename) {
@@ -118,19 +119,57 @@ async function refreshLocalAiStatus() {
     return state;
   } catch { return null; }
 }
-$('#connectHf').addEventListener('click', async () => {
-  const token = $('#hfToken').value.trim(); if (!token) { toast('تۆکنی Hugging Face بنووسە', true); return; }
-  const button = $('#connectHf'); button.disabled = true; button.textContent = 'پشکنین...';
+async function refreshOAuthConfig() {
   try {
-    const response = await fetch('/api/huggingface/connect', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token})});
-    const data = await response.json(); if (!response.ok) throw new Error(data.error || 'پەیوەندی بە Hugging Face سەرکەوتوو نەبوو');
-    $('#hfToken').value = ''; await refreshLocalAiStatus(); toast(`بە سەرکەوتوویی پەیوەست بوو: ${data.username}`);
-  } catch (error) { toast(error.message, true); }
-  finally { button.disabled = false; button.textContent = 'پەیوەستکردن'; }
-});
+    const response = await fetch('/api/oauth/config'); const config = await response.json();
+    if (!config.github_ready) $('#githubOauthStatus').textContent = 'چوونەژوورەوەی GitHub هێشتا لەم build ـەدا ڕێکنەخراوە.';
+    if (!config.huggingface_ready) $('#hfOauthStatus').textContent = 'چوونەژوورەوەی Hugging Face هێشتا لەم build ـەدا ڕێکنەخراوە.';
+  } catch { /* OAuth buttons will report a useful error if the API is unavailable. */ }
+}
+function deviceLoginUi(provider) {
+  return provider === 'github'
+    ? {button:$('#githubLogin'),panel:$('#githubOauthPanel'),status:$('#githubOauthStatus'),code:$('#githubUserCode'),open:$('#openGithubVerify'),verify:'https://github.com/login/device'}
+    : {button:$('#hfLogin'),panel:$('#hfOauthPanel'),status:$('#hfOauthStatus'),code:$('#hfUserCode'),open:$('#openHfVerify'),verify:'https://huggingface.co/oauth/device'};
+}
+async function beginDeviceLogin(provider) {
+  const ui = deviceLoginUi(provider); ui.button.disabled = true; ui.button.textContent = 'ئامادە دەکرێت...';
+  try {
+    const startResponse = await fetch('/api/oauth/device/start', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider})});
+    const start = await startResponse.json(); if (!startResponse.ok) throw new Error(start.error || 'دەستپێکردنی login سەرکەوتوو نەبوو');
+    if (start.verification_uri !== ui.verify) throw new Error('ناونیشانی login پشتڕاست نەکراوەتەوە.');
+    ui.panel.hidden = false; ui.code.textContent = start.user_code;
+    ui.status.textContent = 'ئەم کۆدە لە پەڕەی فەرمی دابنێ و داواکارییەکە ڕەزامەندی پێ بدە. ئەپ خۆکارانە چاوەڕێ دەکات.';
+    ui.open.onclick = () => {
+      if (window.KurdLocalAI?.openVerificationUrl) window.KurdLocalAI.openVerificationUrl(start.verification_uri);
+      else window.open(start.verification_uri, '_blank', 'noopener');
+    };
+    let interval = Math.max(2, Number(start.interval || 5)), expires = Date.now() + Number(start.expires_in || 900) * 1000;
+    while (Date.now() < expires) {
+      await new Promise(resolve => setTimeout(resolve, interval * 1000));
+      const pollResponse = await fetch('/api/oauth/device/poll', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,job_id:start.job_id})});
+      const result = await pollResponse.json(); if (!pollResponse.ok) throw new Error(result.error || 'پشتڕاستکردنەوە تەواو نەبوو');
+      if (result.pending) { interval = Math.max(interval, Number(result.interval || interval)); continue; }
+      ui.panel.hidden = true;
+      await Promise.all([refreshGithub(), refreshLocalAiStatus()]);
+      toast(`بە سەرکەوتوویی پەیوەست بوو: ${result.username}`); return;
+    }
+    throw new Error('کاتی کۆدی login تەواو بوو؛ دووبارە هەوڵ بدە.');
+  } catch (error) { ui.status.textContent = error.message; ui.panel.hidden = false; toast(error.message, true); }
+  finally { ui.button.disabled = false; ui.button.innerHTML = `چوونەژوورەوە بە ${provider === 'github' ? 'GitHub' : 'Hugging Face'} <span>↗</span>`; }
+}
+$('#githubLogin').addEventListener('click', () => beginDeviceLogin('github'));
+$('#hfLogin').addEventListener('click', () => beginDeviceLogin('huggingface'));
+function setHuggingFaceConnected(connected, username = '') {
+  $('#hfBadge').textContent = connected ? `پەیوەستە${username ? ': ' + username : ''}` : 'پەیوەست نییە';
+  $('#hfBadge').classList.toggle('connected-badge', connected);
+  $('#hfLogin').hidden = connected; $('#hfConnected').hidden = !connected;
+  $('#hfConnectedAs').textContent = username ? `پەیوەستە بە ${username}` : 'پەیوەستە';
+  updateConnectionCount();
+}
+$('#gotoConnections').addEventListener('click', () => showPage('connections'));
 $('#disconnectHf').addEventListener('click', async () => {
-  try { const response = await fetch('/api/huggingface/connect', {method:'DELETE'}); if (!response.ok) throw new Error(); await refreshLocalAiStatus(); toast('تۆکنی Hugging Face سڕایەوە'); }
-  catch { toast('سڕینەوەی تۆکن سەرکەوتوو نەبوو', true); }
+  try { const response = await fetch('/api/huggingface/connect', {method:'DELETE'}); if (!response.ok) throw new Error(); await refreshLocalAiStatus(); toast('پەیوەندیی Hugging Face جیاکرایەوە'); }
+  catch { toast('جیاکردنەوە سەرکەوتوو نەبوو', true); }
 });
 $('#loadHfFiles').addEventListener('click', async () => {
   const repo = $('#localHfRepo').value.trim(); if (!repo) { toast('ناوی ڕێپۆ بنووسە', true); return; }
@@ -256,29 +295,28 @@ async function refreshStatus() {
     status.classList.toggle('ok',data.available); status.classList.toggle('error',!data.available);
     status.lastElementChild.textContent=data.available ? (data.model || `${data.models.length} مۆدێل ئامادەیە`) : 'مۆدێل پەیوەست نییە';
     $('#currentModel').textContent=data.model||'مۆدێل هەڵنەبژێردراوە';
-    $('#connectionCount').textContent=data.github_connected?'١':'٠';
+    updateConnectionCount();
     if(data.has_api_key) $('#keySaved').hidden=false;
   } catch {status.classList.add('error');status.lastElementChild.textContent='سێرڤەر بەردەست نییە';}
 }
 
 async function refreshGithub() {
   try {
-    const response=await fetch('/api/github/state'); const data=await response.json();
-    setGithubConnected(data.connected);
-  } catch {setGithubConnected(false);}
+    const response = await fetch('/api/github/state'); const data = await response.json();
+    setGithubConnected(data.connected, data.username);
+  } catch { setGithubConnected(false); }
 }
-function setGithubConnected(connected) {
-  $('#githubBadge').textContent=connected?'پەیوەستە':'پەیوەست نییە'; $('#githubBadge').classList.toggle('connected-badge',connected);
-  $('#githubConnectRow').hidden=connected; $('#githubConnected').hidden=!connected; $('#connectionCount').textContent=connected?'١':'٠';
+function updateConnectionCount() {
+  const count = Number($('#githubBadge').classList.contains('connected-badge')) + Number($('#hfBadge').classList.contains('connected-badge'));
+  $('#connectionCount').textContent = String(count);
 }
-$('#connectGithub').addEventListener('click', async () => {
-  const token=$('#githubToken').value.trim(); if(!token){toast('تکایە GitHub token بنووسە',true);return;}
-  const button=$('#connectGithub');button.disabled=true;button.textContent='پەیوەست دەبێت...';
-  try {
-    const response=await fetch('/api/github/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});const data=await response.json();if(!response.ok)throw new Error(data.error);
-    $('#githubToken').value='';setGithubConnected(true);toast(`بە سەرکەوتوویی پەیوەست بوو: ${data.login}`);
-  }catch(error){toast(error.message,true);}finally{button.disabled=false;button.innerHTML='پەیوەستکردن <span>↗</span>';}
-});
+function setGithubConnected(connected, username = '') {
+  $('#githubBadge').textContent = connected ? `پەیوەستە${username ? ': ' + username : ''}` : 'پەیوەست نییە';
+  $('#githubBadge').classList.toggle('connected-badge', connected);
+  $('#githubLogin').hidden = connected; $('#githubConnected').hidden = !connected;
+  $('#githubConnectedAs').textContent = username ? `پەیوەستە بە ${username}` : 'پەیوەستە';
+  updateConnectionCount();
+}
 $('#loadRepos').addEventListener('click', async () => {
   const list=$('#repoList');list.innerHTML='<span class="field-note">ڕێپۆکان بار دەکرێن...</span>';
   try {
@@ -296,3 +334,4 @@ $('#mcpInfo').addEventListener('click', () => {const panel=$('#mcpDetails');pane
 // A lightweight shortcut for opening a fresh conversation.
 document.addEventListener('keydown', event => {if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'){event.preventDefault();clearChat();}});
 refreshStatus();
+refreshOAuthConfig();

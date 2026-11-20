@@ -18,12 +18,18 @@ val copyKurdAgentWeb by tasks.registering(Copy::class) {
     into(generatedWebAssets)
 }
 
+val githubOAuthClientId = providers.environmentVariable("KURD_AGENT_GITHUB_OAUTH_CLIENT_ID").orElse("").get()
+val hfOAuthClientId = providers.environmentVariable("KURD_AGENT_HF_OAUTH_CLIENT_ID").orElse("").get()
+
 android {
     namespace = "com.kurdagent.app"
     compileSdk = 37
+    buildFeatures { buildConfig = true }
 
     defaultConfig {
         applicationId = "com.kurdagent.app"
+        buildConfigField("String", "GITHUB_OAUTH_CLIENT_ID", "\"$githubOAuthClientId\"")
+        buildConfigField("String", "HF_OAUTH_CLIENT_ID", "\"$hfOAuthClientId\"")
         minSdk = 26
         targetSdk = 28
         val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
