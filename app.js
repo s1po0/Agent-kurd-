@@ -269,36 +269,77 @@ function updateLocalFileSize() {
   $('#localHfFileSize').textContent = text.includes(' · ') ? `— ${text.split(' · ').at(-1)}` : '';
 }
 $('#localHfFile').addEventListener('change', updateLocalFileSize);
+async function waitForLocalModelDownload(jobId) {
+  while (true) {
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    let response;
+    try { response = await fetch('/api/models/pull?id=' + encodeURIComponent(jobId)); }
+    catch { $('#localDownloadStatus').textContent = 'پەیوەندی کاتییە؛ داگرتن لە پاشبنەما بەردەوامە...'; continue; }
+    if (response.status === 404) {
+      localStorage.removeItem('kurd-local-download-job');
+      throw new Error('دۆخی داگرتن لەدەستچوو؛ تکایە جارێکی تر داگرتن دەستپێبکە.');
+    }
+    if (!response.ok) { $('#localDownloadStatus').textContent = 'پشکنینی داگرتن دووبارە دەکرێتەوە...'; continue; }
+    const status = await response.json(), job = status.job;
+    $('#localDownloadStatus').textContent = job.status || 'مۆدێل دادەبەزێت...';
+    $('#localDownloadPercent').textContent = `${job.percent || 0}%`; $('#localDownloadBar').style.width = `${job.percent || 0}%`;
+    if (job.state === 'error') {
+      localStorage.removeItem('kurd-local-download-job');
+      throw new Error(job.error || 'داگرتنی مۆدێل سەرکەوتوو نەبوو');
+    }
+    if (job.state === 'complete') return job;
+  }
+}
 $('#downloadLocalModel').addEventListener('click', async () => {
   const repo = $('#localHfRepo').value.trim(), filename = $('#localHfFile').value;
   if (!repo || !filename) { toast('ڕێپۆ و فایلی GGUF هەڵبژێرە', true); return; }
   const button = $('#downloadLocalModel'), progress = $('#localDownloadProgress'); button.disabled = true; button.textContent = 'دادەبەزێت...'; progress.hidden = false;
   $('#localDownloadStatus').textContent = 'پەیوەندی بە Hugging Face...'; $('#localDownloadPercent').textContent = '0%'; $('#localDownloadBar').style.width = '0%';
   try {
+    if (window.KurdLocalAI?.setModelDownloadActive) window.KurdLocalAI.setModelDownloadActive(true);
+    $('#localDownloadStatus').textContent = 'دادگرتن دەستپێدەکات؛ لە پاشبنەما بەردەوام دەبێت.';
     const response = await fetch('/api/local-ai/download', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({repo, filename})});
     const data = await response.json(); if (!response.ok) throw new Error(data.error || 'داگرتنی مۆدێل دەستپێ نەکرا');
-    let job;
-    while (true) {
-      await new Promise(resolve => setTimeout(resolve, 1200));
-      const statusResponse = await fetch('/api/models/pull?id=' + encodeURIComponent(data.job_id)); const status = await statusResponse.json();
-      if (!statusResponse.ok) throw new Error(status.error || 'دۆخی داگرتن بەردەست نییە');
-      job = status.job; $('#localDownloadStatus').textContent = job.status || 'مۆدێل دادەبەزێت...';
-      $('#localDownloadPercent').textContent = `${job.percent || 0}%`; $('#localDownloadBar').style.width = `${job.percent || 0}%`;
-      if (job.state === 'error') throw new Error(job.error || 'داگرتنی مۆدێل سەرکەوتوو نەبوو');
-      if (job.state === 'complete') break;
-    }
+    localStorage.setItem('kurd-local-download-job', data.job_id);
+    await waitForLocalModelDownload(data.job_id);
+    localStorage.removeItem('kurd-local-download-job');
     const state = await refreshLocalAiStatus();
     if (!state?.model_ready) throw new Error('فایلی GGUF لەسەر ئامێر پاشەکەوت نەکرا.');
     $('#provider').value = 'android-local';
-    await saveModelSettings('');
     await callLocalAi('loadModel', state.model_path);
     $('#localDownloadStatus').textContent = 'مۆدێل لەسەر ئامێر لۆد کرا؛ inferencing ئۆفلاینە';
     await refreshStatus(); showPage('chat');
     setTimeout(() => $('#promptInput').focus(), 100);
     toast('مۆدێل لۆد کرا؛ ئێستا پرسیارەکەت بنووسە بۆ چاتی ئۆفلاین');
   } catch (error) { $('#localDownloadStatus').textContent = error.message; toast(error.message, true); }
-  finally { button.disabled = false; button.innerHTML = 'داگرتن بۆ ئەم ئامێرە <span>↓</span>'; }
+  finally {
+    if (!localStorage.getItem('kurd-local-download-job') && window.KurdLocalAI?.setModelDownloadActive) window.KurdLocalAI.setModelDownloadActive(false);
+    button.disabled = false; button.innerHTML = 'داگرتن بۆ ئەم ئامێرە <span>↓</span>';
+  }
 });
+async function resumePendingLocalModelDownload() {
+  const jobId = localStorage.getItem('kurd-local-download-job');
+  if (!jobId || !window.KurdLocalAI?.setModelDownloadActive) return;
+  const button = $('#downloadLocalModel'); button.disabled = true; button.textContent = 'دادەبەزێت...';
+  $('#localDownloadProgress').hidden = false;
+  $('#localDownloadStatus').textContent = 'داگرتنی پاشبنەما بەردەوامە...';
+  window.KurdLocalAI.setModelDownloadActive(true);
+  try {
+    await waitForLocalModelDownload(jobId);
+    localStorage.removeItem('kurd-local-download-job');
+    const state = await refreshLocalAiStatus();
+    if (!state?.model_ready) throw new Error('فایلی GGUF لەسەر ئامێر پاشەکەوت نەکرا.');
+    $('#provider').value = 'android-local';
+    await callLocalAi('loadModel', state.model_path);
+    $('#localDownloadStatus').textContent = 'داگرتن تەواو بوو؛ مۆدێل لۆد کرا و ئۆفلاین ئامادەیە';
+    await refreshStatus(); showPage('chat'); toast('داگرتنی پاشبنەما تەواو بوو؛ چاتی ئۆفلاین ئامادەیە');
+  } catch (error) {
+    $('#localDownloadStatus').textContent = error.message; toast(error.message, true);
+  } finally {
+    if (!localStorage.getItem('kurd-local-download-job')) window.KurdLocalAI.setModelDownloadActive(false);
+    button.disabled = false; button.innerHTML = 'داگرتن بۆ ئەم ئامێرە <span>↓</span>';
+  }
+}
 $('#refreshModels').addEventListener('click', async () => {
   const button = $('#refreshModels'); button.disabled=true; button.textContent='...';
   try {
@@ -487,3 +528,4 @@ $('#mcpInfo').addEventListener('click', () => {const panel=$('#mcpDetails');pane
 document.addEventListener('keydown', event => {if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'){event.preventDefault();clearChat();}});
 refreshStatus();
 refreshOAuthConfig();
+if (window.KurdLocalAI) setTimeout(resumePendingLocalModelDownload, 900);

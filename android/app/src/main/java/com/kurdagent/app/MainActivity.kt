@@ -27,7 +27,9 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        stopService(Intent(this, OAuthKeepAliveService::class.java))
+        val downloadActive = getSharedPreferences("kurd_agent_background", MODE_PRIVATE)
+            .getBoolean("model_download_active", false)
+        if (!downloadActive) stopService(Intent(this, OAuthKeepAliveService::class.java))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

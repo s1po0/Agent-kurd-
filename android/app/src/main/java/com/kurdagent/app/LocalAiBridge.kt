@@ -30,12 +30,28 @@ class LocalAiBridge(
         val allowedHttps = uri.scheme == "https" && uri.host in setOf("github.com", "huggingface.co")
         val allowedLocalSetup = uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == 8000 && uri.path == "/api/github/app-manifest/start-page"
         if (!allowedHttps && !allowedLocalSetup) return
+        val downloadActive = activity.getSharedPreferences("kurd_agent_background", Activity.MODE_PRIVATE)
+            .getBoolean("model_download_active", false)
         val keepAlive = Intent(activity, OAuthKeepAliveService::class.java)
+            .putExtra(OAuthKeepAliveService.EXTRA_MODEL_DOWNLOAD, downloadActive)
         try {
             activity.startForegroundService(keepAlive)
             activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
         } catch (_: Exception) {
             activity.stopService(keepAlive)
+        }
+    }
+
+    @JavascriptInterface
+    fun setModelDownloadActive(active: Boolean) {
+        activity.getSharedPreferences("kurd_agent_background", Activity.MODE_PRIVATE)
+            .edit().putBoolean("model_download_active", active).apply()
+        val service = Intent(activity, OAuthKeepAliveService::class.java)
+            .putExtra(OAuthKeepAliveService.EXTRA_MODEL_DOWNLOAD, active)
+        if (active) {
+            try { activity.startForegroundService(service) } catch (_: Exception) { }
+        } else {
+            activity.stopService(service)
         }
     }
 
