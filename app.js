@@ -55,6 +55,40 @@ $('#mobileNewChat').addEventListener('click', clearChat);
 function clearChat() { chatHistory = []; $('#messages').replaceChildren(); $('#welcome').hidden = false; $('#chatError').hidden = true; $('#promptInput').focus(); }
 function showChatError(message) { $('#chatErrorText').textContent = `هەڵەی چات: ${message}`; $('#chatError').hidden = false; }
 $('#dismissChatError').addEventListener('click', () => { $('#chatError').hidden = true; });
+const agentToolLabels = {
+  github_create_branch:'دروستکردنی branch ـێکی نوێ',
+  github_commit_file:'نووسین/نوێکردنەوەی فایل و commit',
+  github_create_pull_request:'کردنەوەی pull request',
+  github_run_workflow:'ڕاکردنی GitHub Actions workflow'
+};
+function renderAgentApproval(action) {
+  const row = addMessage('assistant', 'Agent داوای مۆڵەت دەکات بۆ کردارێک لە GitHub.');
+  const body = row.querySelector('.message-body'), card = document.createElement('section');
+  card.className = 'agent-approval-card';
+  const title = document.createElement('strong'); title.textContent = agentToolLabels[action.tool] || 'کرداری GitHub';
+  const preview = document.createElement('pre'); preview.textContent = JSON.stringify(action.arguments || {}, null, 2);
+  const status = document.createElement('div'); status.className = 'agent-approval-status';
+  const controls = document.createElement('div'); controls.className = 'agent-approval-buttons';
+  const approve = document.createElement('button'); approve.type = 'button'; approve.className = 'primary-button'; approve.textContent = 'مۆڵەت بدە و جێبەجێی بکە';
+  const deny = document.createElement('button'); deny.type = 'button'; deny.className = 'text-button danger-text'; deny.textContent = 'ڕەتکردنەوە';
+  const decide = async approved => {
+    approve.disabled = true; deny.disabled = true; status.textContent = approved ? 'کردارەکە جێبەجێ دەکرێت...' : 'داواکاری ڕەت کرایەوە.';
+    try {
+      const response = await fetch('/api/agent/approve', {method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({approval_id:action.id, approve:approved})});
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || 'نەتوانرا کردارەکە جێبەجێ بکرێت');
+      if (result.approved) {
+        status.textContent = `جێبەجێکرا ✓\n${JSON.stringify(result.result, null, 2)}`;
+        chatHistory.push({role:'assistant', content:`Approved ${action.tool}. Result: ${JSON.stringify(result.result)}`});
+      } else chatHistory.push({role:'assistant', content:`The user denied ${action.tool}.`});
+    } catch (error) {
+      status.textContent = `جێبەجێ نەکرا: ${error.message}`; showChatError(error.message); approve.disabled = false; deny.disabled = false;
+    }
+  };
+  approve.addEventListener('click', () => decide(true)); deny.addEventListener('click', () => decide(false));
+  controls.append(approve, deny); card.append(title, preview, controls, status); body.append(card);
+  return row;
+}
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -91,6 +125,11 @@ async function sendPrompt(text) {
     } else {
       const response = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({messages:[{role:'system', content:defaultSystem}, ...chatHistory], context:chatContext})});
       result = await response.json(); if (!response.ok) throw new Error(result.error || 'هەڵەیەک ڕوویدا');
+    }
+    if (result.pending_action) {
+      pending.remove(); renderAgentApproval(result.pending_action);
+      $('#messages').lastElementChild?.scrollIntoView({behavior:'smooth', block:'nearest'});
+      return;
     }
     pending.remove(); const reply = result.reply || 'وەڵامێک نەگەڕایەوە.'; chatHistory.push({role:'assistant', content:reply});
     const toolsNote = result.tools_used?.length ? '\n\n🧰 ئامرازەکانی GitHub بەکارهێنران' : ''; addMessage('assistant', reply + toolsNote);

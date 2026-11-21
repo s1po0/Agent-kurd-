@@ -26,6 +26,8 @@ LOCK = threading.Lock()
 PULL_JOBS = {}
 OAUTH_DEVICE_JOBS = {}
 APP_MANIFEST_JOBS = {}
+PENDING_AGENT_APPROVALS = {}
+APPROVAL_REQUIRED_TOOLS = {"github_create_branch", "github_commit_file", "github_create_pull_request", "github_run_workflow"}
 OAUTH_CLIENT_IDS = {
     # GitHub value is the client ID for a GitHub App with device flow enabled, not an OAuth App.
     "github": os.environ.get("KURD_AGENT_GITHUB_APP_CLIENT_ID", ""),
@@ -609,6 +611,24 @@ class Handler(BaseHTTPRequestHandler):
             return {"dispatched": True, "repo": repo, "workflow": workflow, "ref": ref, "result": result or "GitHub accepted the workflow dispatch."}
         raise ValueError("This agent tool is not allowed.")
 
+    def queue_agent_approval(self, name, arguments):
+        if name not in APPROVAL_REQUIRED_TOOLS:
+            raise ValueError("This action does not require an approval request.")
+        if len(json.dumps(arguments, ensure_ascii=False)) > 20_000:
+            raise ValueError("The proposed action is too large to review safely.")
+        now = time.time()
+        with LOCK:
+            expired = [key for key, item in PENDING_AGENT_APPROVALS.items() if item["expires_at"] <= now]
+            for key in expired:
+                PENDING_AGENT_APPROVALS.pop(key, None)
+            if len(PENDING_AGENT_APPROVALS) >= 100:
+                raise ValueError("Too many pending approvals. Resolve one and try again.")
+            approval_id = secrets.token_urlsafe(24)
+            PENDING_AGENT_APPROVALS[approval_id] = {
+                "tool": name, "arguments": arguments, "expires_at": now + 300,
+            }
+        return {"id": approval_id, "tool": name, "arguments": arguments, "expires_in": 300}
+
     def chat_with_tools(self, cfg, messages, context=None):
         messages = list(messages)
         context = context or {}
@@ -652,7 +672,7 @@ class Handler(BaseHTTPRequestHandler):
                 message = result["choices"][0]["message"]
             calls = message.get("tool_calls") or []
             if not calls:
-                return str(message.get("content") or ""), used
+                return str(message.get("content") or ""), used, None
             messages.append(message)
             for call in calls[:4]:
                 fn = call.get("function", {})
@@ -678,6 +698,9 @@ class Handler(BaseHTTPRequestHandler):
                         args.setdefault("ref", selected_branch)
                     elif name == "github_create_pull_request":
                         args.setdefault("head", selected_branch)
+                if name in APPROVAL_REQUIRED_TOOLS:
+                    pending_action = self.queue_agent_approval(name, args)
+                    return "", used, pending_action
                 try:
                     output = self.execute_agent_tool(name, args)
                 except Exception as exc:
@@ -689,7 +712,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     tool_message["tool_name"] = name
                 messages.append(tool_message)
-        return "The agent reached its tool-call limit. Please ask a narrower question.", used
+        return "The agent reached its tool-call limit. Please ask a narrower question.", used, None
 
     def start_hf_pull(self, model_name, base_url):
         job_id = secrets.token_urlsafe(9)
@@ -966,6 +989,21 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Invalid sign-in session.")
                 self.send_json(200, self.poll_device_oauth(provider, job_id))
                 return
+            if path == "/api/agent/approve":
+                approval_id = str(data.get("approval_id", ""))
+                decision = data.get("approve")
+                if not approval_id or not isinstance(decision, bool):
+                    raise ValueError("Choose approve or deny for the pending agent action.")
+                with LOCK:
+                    pending = PENDING_AGENT_APPROVALS.pop(approval_id, None)
+                if not pending or pending["expires_at"] <= time.time():
+                    raise ValueError("This approval expired. Ask the agent to propose the action again.")
+                if not decision:
+                    self.send_json(200, {"ok": True, "approved": False, "tool": pending["tool"]})
+                    return
+                result = self.execute_agent_tool(pending["tool"], pending["arguments"])
+                self.send_json(200, {"ok": True, "approved": True, "tool": pending["tool"], "result": result})
+                return
             if path == "/api/local-ai/select":
                 local_name = str(data.get("local_filename", "")).strip()
                 display_name = str(data.get("filename", "")).strip()
@@ -1032,8 +1070,9 @@ class Handler(BaseHTTPRequestHandler):
                     "branch": self.validate_git_ref(context_data["branch"]) if context_data.get("branch") else "",
                     "thinking": bool(context_data.get("thinking")),
                 }
-                answer, tools_used = self.chat_with_tools(cfg, messages, context)
-                self.send_json(200, {"reply": answer, "tools_used": tools_used})
+                answer, tools_used, pending_action = self.chat_with_tools(cfg, messages, context)
+                self.send_json(200, {"reply": answer, "tools_used": tools_used,
+                                     "pending_action": pending_action})
                 return
             if path == "/api/models/pull":
                 cfg = DEFAULTS | read_json(CONFIG_PATH, {})

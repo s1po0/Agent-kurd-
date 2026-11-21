@@ -89,6 +89,25 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(state["models"], [server.KILO_FREE_MODEL])
         self.assertFalse(state["has_api_key"])
 
+    def test_kilo_free_can_use_connected_read_only_github_tools(self):
+        self.config.write_text(json.dumps({"provider": "kilo-free", "base_url": server.KILO_FREE_BASE_URL,
+            "model": server.KILO_FREE_MODEL}))
+        first = {"choices": [{"message": {"role": "assistant", "tool_calls": [{
+            "id": "call_repos", "function": {"name": "github_list_repositories", "arguments": {}}}]}}]}
+        final = {"choices": [{"message": {"role": "assistant", "content": "I found your repositories."}}]}
+        with (
+            patch.object(server, "github_app_secret_data", return_value={
+                "github_token": "test-token", "github_auth_type": "github_app"}),
+            patch.object(server.Handler, "execute_agent_tool", return_value=[{"name": "owner/repo"}]) as execute,
+            patch.object(server, "request_json", side_effect=[first, final]) as request,
+        ):
+            status, result = self.call_api("/api/chat", {
+                "messages": [{"role": "user", "content": "List my repositories"}]})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["reply"], "I found your repositories.")
+        self.assertEqual(execute.call_args.args[0], "github_list_repositories")
+        self.assertIn("tools", request.call_args_list[0].kwargs["data"])
+
     def test_kilo_free_chat_never_sends_a_saved_api_key(self):
         self.config.write_text(json.dumps({"provider": "kilo-free", "base_url": server.KILO_FREE_BASE_URL,
             "model": server.KILO_FREE_MODEL, "api_key": "old-provider-secret"}))
@@ -217,6 +236,43 @@ class ApiTest(unittest.TestCase):
         self.assertTrue(sent["think"])
         self.assertIn("owner/project", sent["messages"][1]["content"])
         self.assertIn("feature/docs", sent["messages"][1]["content"])
+
+    def test_mutating_agent_tool_waits_for_in_app_approval(self):
+        self.config.write_text(json.dumps({"provider": "ollama", "base_url": "http://127.0.0.1:11434", "model": "tool-model"}))
+        arguments = {"repo": "owner/project", "branch": "feature/change", "path": "README.md",
+                     "content": "Updated text", "message": "Update README"}
+        first = {"message": {"role": "assistant", "tool_calls": [{"id": "call_write", "function": {
+            "name": "github_commit_file", "arguments": json.dumps(arguments)}}]}}
+        with (
+            patch.object(server, "github_app_secret_data", return_value={"github_token": "token", "github_auth_type": "github_app"}),
+            patch.object(server, "request_json", return_value=first),
+            patch.object(server.Handler, "execute_agent_tool") as execute,
+        ):
+            status, response = self.call_api("/api/chat", {
+                "messages": [{"role": "user", "content": "Update the README"}],
+                "context": {"repo": "owner/project", "branch": "feature/change"}})
+            self.assertEqual(status, 200)
+            self.assertFalse(execute.called)
+            pending = response["pending_action"]
+            self.assertEqual(pending["tool"], "github_commit_file")
+            self.assertEqual(pending["arguments"]["branch"], "feature/change")
+            status, denied = self.call_api("/api/agent/approve", {
+                "approval_id": pending["id"], "approve": False})
+            self.assertEqual(status, 200)
+            self.assertFalse(denied["approved"])
+            status, expired = self.call_api("/api/agent/approve", {
+                "approval_id": pending["id"], "approve": True})
+            self.assertEqual(status, 400)
+            self.assertFalse(execute.called)
+            execute.return_value = {"committed": True, "branch": "feature/change"}
+            status, second = self.call_api("/api/chat", {
+                "messages": [{"role": "user", "content": "Update the README"}],
+                "context": {"repo": "owner/project", "branch": "feature/change"}})
+            status, approved = self.call_api("/api/agent/approve", {
+                "approval_id": second["pending_action"]["id"], "approve": True})
+            self.assertEqual(status, 200)
+            self.assertTrue(approved["approved"])
+            self.assertTrue(execute.called)
 
     def test_github_branch_picker_returns_branch_names(self):
         with patch.object(server.Handler, "github_api", return_value=[{"name": "main"}, {"name": "feature/x"}]) as api:
