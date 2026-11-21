@@ -24,6 +24,7 @@ class MainActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var progress: ProgressBar
     private var localAiBridge: LocalAiBridge? = null
+    private var pendingGgufCallbackId: String? = null
 
     override fun onResume() {
         super.onResume()
@@ -96,6 +97,26 @@ class MainActivity : Activity() {
         }
     }
 
+    fun openGgufPicker(callbackId: String) {
+        if (pendingGgufCallbackId != null) {
+            localAiBridge?.finishGgufImport(callbackId, "A file picker is already open.")
+            return
+        }
+        pendingGgufCallbackId = callbackId
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/octet-stream", "application/x-gguf", "*/*"))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivityForResult(intent, REQUEST_GGUF)
+        } catch (error: Exception) {
+            pendingGgufCallbackId = null
+            localAiBridge?.finishGgufImport(callbackId, error.message ?: "Could not open phone storage.")
+        }
+    }
+
     private fun copyWebAssets() {
         val target = File(filesDir, "kurd-agent/www")
         target.mkdirs()
@@ -114,6 +135,17 @@ class MainActivity : Activity() {
         }
     }
 
+    @Deprecated("Deprecated by Android; retained for document-picker compatibility")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_GGUF) return
+        val callbackId = pendingGgufCallbackId ?: return
+        pendingGgufCallbackId = null
+        val uri = if (resultCode == RESULT_OK) data?.data else null
+        if (uri == null) localAiBridge?.cancelGgufImport(callbackId)
+        else localAiBridge?.importGguf(uri, callbackId)
+    }
+
     @Deprecated("Deprecated by Android; retained for back navigation compatibility")
     override fun onBackPressed() {
         if (this::webView.isInitialized && webView.canGoBack()) webView.goBack() else super.onBackPressed()
@@ -123,5 +155,9 @@ class MainActivity : Activity() {
         localAiBridge?.close()
         if (this::webView.isInitialized) webView.destroy()
         super.onDestroy()
+    }
+
+    companion object {
+        private const val REQUEST_GGUF = 8201
     }
 }

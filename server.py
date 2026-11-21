@@ -299,6 +299,25 @@ class Handler(BaseHTTPRequestHandler):
                                  "github_install_url": f"https://github.com/apps/{valid_slug}/installations/new" if valid_slug else "",
                                  "huggingface_ready": bool(huggingface_oauth_client_id())})
             return
+        if path == "/api/local-ai/models":
+            model_dir = DATA_DIR / "models"
+            cfg = read_json(CONFIG_PATH, {})
+            current = cfg.get("local_model") or {}
+            selected = current.get("local_filename", "")
+            catalog = read_json(model_dir / "imported_models.json", {})
+            if not isinstance(catalog, dict):
+                catalog = {}
+            models = []
+            if model_dir.is_dir():
+                for model_file in model_dir.iterdir():
+                    if model_file.is_file() and re.fullmatch(r"import_[A-Za-z0-9_-]{8,64}\.gguf", model_file.name):
+                        fallback_name = str(current.get("filename", model_file.name)) if model_file.name == selected else model_file.name
+                        display_name = str(catalog.get(model_file.name, fallback_name))
+                        models.append({"local_filename": model_file.name, "filename": display_name,
+                                       "size": model_file.stat().st_size, "selected": model_file.name == selected})
+            models.sort(key=lambda item: (not item["selected"], item["filename"].lower()))
+            self.send_json(200, {"models": models})
+            return
         if path == "/api/local-ai/status":
             cfg = read_json(CONFIG_PATH, {})
             local = cfg.get("local_model") or {}
@@ -935,6 +954,51 @@ class Handler(BaseHTTPRequestHandler):
                 if provider not in ("github", "huggingface") or not job_id:
                     raise ValueError("Invalid sign-in session.")
                 self.send_json(200, self.poll_device_oauth(provider, job_id))
+                return
+            if path == "/api/local-ai/select":
+                local_name = str(data.get("local_filename", "")).strip()
+                display_name = str(data.get("filename", "")).strip()
+                if not re.fullmatch(r"(?:import_[A-Za-z0-9_-]{8,64}|[A-Fa-f0-9]{20})\.gguf", local_name):
+                    raise ValueError("Invalid local GGUF filename.")
+                if not display_name.lower().endswith(".gguf") or len(display_name) > 255 or Path(display_name).name != display_name or chr(92) in display_name:
+                    raise ValueError("Choose a GGUF model file.")
+                model_path = DATA_DIR / "models" / local_name
+                if not model_path.is_file() or model_path.stat().st_size == 0:
+                    raise ValueError("This GGUF file is missing or empty.")
+                if local_name.startswith("import_"):
+                    catalog_path = DATA_DIR / "models" / "imported_models.json"
+                    catalog = read_json(catalog_path, {})
+                    if not isinstance(catalog, dict):
+                        catalog = {}
+                    catalog[local_name] = display_name
+                    write_json_private(catalog_path, catalog)
+                cfg = read_json(CONFIG_PATH, {})
+                cfg["provider"] = "android-local"
+                cfg["local_model"] = {"repo": "local/imported", "filename": display_name, "local_filename": local_name}
+                write_json_private(CONFIG_PATH, cfg)
+                self.send_json(200, {"ok": True, "filename": display_name})
+                return
+            if path == "/api/local-ai/import":
+                local_name = str(data.get("local_filename", "")).strip()
+                display_name = str(data.get("filename", "")).strip()
+                if not re.fullmatch(r"import_[A-Za-z0-9_-]{8,64}\.gguf", local_name):
+                    raise ValueError("Invalid imported GGUF filename.")
+                if not display_name.lower().endswith(".gguf") or len(display_name) > 255 or Path(display_name).name != display_name or chr(92) in display_name:
+                    raise ValueError("Choose a GGUF model file from phone storage.")
+                model_path = DATA_DIR / "models" / local_name
+                if not model_path.is_file() or model_path.stat().st_size == 0:
+                    raise ValueError("Imported GGUF file is missing or empty.")
+                catalog_path = DATA_DIR / "models" / "imported_models.json"
+                catalog = read_json(catalog_path, {})
+                if not isinstance(catalog, dict):
+                    catalog = {}
+                catalog[local_name] = display_name
+                write_json_private(catalog_path, catalog)
+                cfg = read_json(CONFIG_PATH, {})
+                cfg["provider"] = "android-local"
+                cfg["local_model"] = {"repo": "local/imported", "filename": display_name, "local_filename": local_name}
+                write_json_private(CONFIG_PATH, cfg)
+                self.send_json(200, {"ok": True, "filename": display_name, "model_path": str(model_path)})
                 return
             if path == "/api/local-ai/download":
                 repo = str(data.get("repo", "")).strip()

@@ -14,11 +14,14 @@ window.onKurdLocalAiResult = (id, payload) => {
   try { const result = JSON.parse(payload); result.ok ? done.resolve(result) : done.reject(new Error(result.error || 'Local inference failed')); }
   catch (error) { done.reject(error); }
 };
-function callLocalAi(method, value) {
+window.onKurdLocalAiToken = (id, token) => {
+  const active = localCalls.get(id); if (active?.onToken) active.onToken(token);
+};
+function callLocalAi(method, value, options = {}) {
   if (!window.KurdLocalAI || typeof window.KurdLocalAI[method] !== 'function') return Promise.reject(new Error('On-device AI is available in the Android app only.'));
   const id = `local_${++localCallSequence}`;
   return new Promise((resolve, reject) => {
-    localCalls.set(id, {resolve, reject});
+    localCalls.set(id, {resolve, reject, onToken:options.onToken});
     try { window.KurdLocalAI[method](value, id); } catch (error) { localCalls.delete(id); reject(error); }
   });
 }
@@ -48,7 +51,9 @@ function showPage(name) {
 document.querySelectorAll('.nav-item').forEach(node => node.addEventListener('click', () => showPage(node.dataset.page)));
 $('#newChat').addEventListener('click', clearChat);
 $('#mobileNewChat').addEventListener('click', clearChat);
-function clearChat() { chatHistory = []; $('#messages').replaceChildren(); $('#welcome').hidden = false; $('#promptInput').focus(); }
+function clearChat() { chatHistory = []; $('#messages').replaceChildren(); $('#welcome').hidden = false; $('#chatError').hidden = true; $('#promptInput').focus(); }
+function showChatError(message) { $('#chatErrorText').textContent = `هەڵەی چات: ${message}`; $('#chatError').hidden = false; }
+$('#dismissChatError').addEventListener('click', () => { $('#chatError').hidden = true; });
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -64,15 +69,24 @@ async function sendPrompt(text) {
   const chatContext = selectedChatContext();
   $('#welcome').hidden = true; addMessage('user', clean); $('#promptInput').value = ''; autoGrow();
   chatHistory.push({role:'user', content:clean});
+  $('#chatError').hidden = true;
   const pending = addMessage('assistant', 'وەڵامەکە ئامادە دەکەم...', true); $('#sendButton').disabled = true;
+  let localProgressTimer, localSlowTimer, localReceivedToken = false, streamedReply = '';
   try {
     let result;
     if ($('#provider').value === 'android-local') {
+      localProgressTimer = setTimeout(() => { if (pending.isConnected) pending.querySelector('.message-body').textContent = 'مۆدێلی ناوخۆیی لەسەر مۆبایل وەڵامەکە دروست دەکات؛ تکایە چاوەڕێ بکە...'; }, 18000);
+      localSlowTimer = setTimeout(() => { if (!localReceivedToken && pending.isConnected) pending.querySelector('.message-body').textContent = 'ئەم مۆدێلە 3B ـە و یەکەم وەڵام لە مۆبایلدا ڕەنگە چەند خولەک بخایەنێت.'; }, 65000);
       const stateResponse = await fetch('/api/local-ai/status'); const state = await stateResponse.json();
       if (!stateResponse.ok || !state.model_ready) throw new Error('یەکەم جار مۆدێلی GGUF لە ڕێکخستن دابەزێنە.');
       await callLocalAi('loadModel', state.model_path);
       const localHistory = chatHistory.slice(-5).map(message => ({...message, content:message.content.slice(-500)}));
-      result = await callLocalAi('chat', JSON.stringify({messages:[{role:'system',content:localSystemPrompt(chatContext)}, ...localHistory], temperature:Number($('#temperature').value)}));
+      result = await callLocalAi('chat', JSON.stringify({messages:[{role:'system',content:localSystemPrompt(chatContext)}, ...localHistory], temperature:Number($('#temperature').value)}), {
+        onToken(token) {
+          localReceivedToken = true; clearTimeout(localProgressTimer); clearTimeout(localSlowTimer);
+          streamedReply += token; pending.querySelector('.message-body').textContent = streamedReply;
+        }
+      });
     } else {
       const response = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({messages:[{role:'system', content:defaultSystem}, ...chatHistory], context:chatContext})});
       result = await response.json(); if (!response.ok) throw new Error(result.error || 'هەڵەیەک ڕوویدا');
@@ -80,8 +94,8 @@ async function sendPrompt(text) {
     pending.remove(); const reply = result.reply || 'وەڵامێک نەگەڕایەوە.'; chatHistory.push({role:'assistant', content:reply});
     const toolsNote = result.tools_used?.length ? '\n\n🧰 ئامرازەکانی GitHub بەکارهێنران' : ''; addMessage('assistant', reply + toolsNote);
   } catch (error) {
-    pending.remove(); chatHistory.pop(); addMessage('assistant', `نەتوانرا وەڵام بدرێتەوە. ${error.message}`); toast(error.message, true);
-  } finally { $('#sendButton').disabled = false; $('#promptInput').focus(); }
+    pending.remove(); chatHistory.pop(); showChatError(error.message); addMessage('assistant', `نەتوانرا وەڵام بدرێتەوە. ${error.message}`); toast(error.message, true);
+  } finally { clearTimeout(localProgressTimer); clearTimeout(localSlowTimer); $('#sendButton').disabled = false; $('#promptInput').focus(); }
 }
 $('#chatForm').addEventListener('submit', event => {event.preventDefault(); sendPrompt($('#promptInput').value);});
 function autoGrow() { const field = $('#promptInput'); field.style.height = 'auto'; field.style.height = `${Math.min(field.scrollHeight,150)}px`; }
@@ -129,9 +143,68 @@ async function refreshLocalAiStatus() {
       }
       select.value = state.filename;
     }
+    await refreshImportedModels();
     return state;
   } catch { return null; }
 }
+async function refreshImportedModels() {
+  const select = $('#importedModelSelect');
+  if (!select) return;
+  try {
+    const response = await fetch('/api/local-ai/models'); const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'نەتوانرا مۆدێلە هەناردەکراوەکان بخوێندرێنەوە');
+    const previous = select.value;
+    select.replaceChildren(new Option(data.models.length ? 'مۆدێل هەڵبژێرە' : 'هێشتا مۆدێل زیاد نەکراوە', ''));
+    data.models.forEach(model => {
+      const option = new Option(`${model.filename} · ${formatModelSize(model.size)}`, model.local_filename);
+      option.dataset.filename = model.filename; select.add(option);
+    });
+    select.value = data.models.some(model => model.local_filename === previous) ? previous
+      : (data.models.find(model => model.selected)?.local_filename || '');
+    $('#useImportedModel').disabled = !select.value;
+    $('#importedModelNote').textContent = data.models.length
+      ? `${data.models.length} مۆدێل لە ناو ئەپەکە هەڵگیراوە؛ هەڵبژێرە و لۆدی بکە.`
+      : (window.KurdLocalAI ? 'فایلەکە لە storage ـی تایبەتی ئەپ کۆپی دەکرێت.' : 'زیادکردنی فایل لە وەشانی Android بەردەستە.');
+  } catch (error) { $('#importedModelNote').textContent = error.message; }
+}
+async function activateImportedModel(localFilename, filename) {
+  const response = await fetch('/api/local-ai/select', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({local_filename:localFilename, filename})});
+  const data = await response.json(); if (!response.ok) throw new Error(data.error || 'هەڵبژاردنی مۆدێل سەرکەوتوو نەبوو');
+  const state = await refreshLocalAiStatus();
+  if (!state?.model_ready) throw new Error('فایلی GGUF لە ناو ئەپەکەدا نەدۆزرایەوە.');
+  await callLocalAi('loadModel', state.model_path);
+  $('#provider').value = 'android-local';
+  await refreshStatus();
+  await refreshImportedModels();
+  showPage('chat');
+  setTimeout(() => $('#promptInput').focus(), 100);
+  toast('مۆدێلی GGUF لۆد کرا؛ چات بەبێ ئینتەرنێت لەسەر ئامێرەکەت کار دەکات.');
+}
+$('#importedModelSelect').addEventListener('change', () => { $('#useImportedModel').disabled = !$('#importedModelSelect').value; });
+$('#useImportedModel').addEventListener('click', async () => {
+  const localFilename = $('#importedModelSelect').value;
+  const model = [...$('#importedModelSelect').options].find(option => option.value === localFilename);
+  if (!localFilename || !model) return;
+  const button = $('#useImportedModel'); button.disabled = true; button.textContent = 'مۆدێل لۆد دەکرێت...';
+  try { await activateImportedModel(localFilename, model.dataset.filename || model.textContent.split(' · ')[0]); }
+  catch (error) { toast(error.message, true); }
+  finally { button.textContent = 'لۆدکردنی مۆدێلی هەڵبژێردراو ↗'; button.disabled = !$('#importedModelSelect').value; }
+});
+$('#importGgufModel').addEventListener('click', async () => {
+  if (!window.KurdLocalAI) { toast('هەناردەکردنی فایل تەنها لە ئەپی Android بەردەستە.', true); return; }
+  const button = $('#importGgufModel'); button.disabled = true; button.textContent = 'فایل هەناردە دەکرێت...';
+  try {
+    const imported = await callLocalAi('pickGguf', '');
+    if (imported.cancelled) return;
+    const response = await fetch('/api/local-ai/import', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({local_filename:imported.local_filename, filename:imported.filename})});
+    const data = await response.json(); if (!response.ok) throw new Error(data.error || 'تۆمارکردنی مۆدێل سەرکەوتوو نەبوو');
+    await refreshImportedModels();
+    await activateImportedModel(imported.local_filename, imported.filename);
+  } catch (error) { toast(error.message, true); $('#importedModelNote').textContent = error.message; }
+  finally { button.disabled = false; button.innerHTML = 'زیادکردنی فایل <span>＋</span>'; }
+});
 async function refreshOAuthConfig() {
   try {
     const response = await fetch('/api/oauth/config'); const config = await response.json();

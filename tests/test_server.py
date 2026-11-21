@@ -136,6 +136,32 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertNotIn("model", json.loads(self.config.read_text()) if self.config.exists() else {})
 
+    def test_imported_gguf_is_registered_as_android_local_model(self):
+        model_dir = Path(self.temp.name) / "models"
+        model_dir.mkdir()
+        (model_dir / "import_abcd1234.gguf").write_bytes(b"GGUF test file")
+        status, result = self.call_api("/api/local-ai/import", {
+            "local_filename": "import_abcd1234.gguf", "filename": "my-local-model.gguf"})
+        self.assertEqual(status, 200)
+        self.assertTrue(result["ok"])
+        config = json.loads(self.config.read_text())
+        self.assertEqual(config["provider"], "android-local")
+        self.assertEqual(config["local_model"]["local_filename"], "import_abcd1234.gguf")
+        status, models = self.call_api("/api/local-ai/models")
+        self.assertEqual(status, 200)
+        self.assertEqual(models["models"][0]["local_filename"], "import_abcd1234.gguf")
+        self.assertEqual(models["models"][0]["filename"], "my-local-model.gguf")
+        status, selected = self.call_api("/api/local-ai/select", {
+            "local_filename": "import_abcd1234.gguf", "filename": "my-local-model.gguf"})
+        self.assertEqual(status, 200)
+        self.assertTrue(selected["ok"])
+        status, error = self.call_api("/api/local-ai/select", {
+            "local_filename": "../../secrets.json", "filename": "bad.gguf"})
+        self.assertEqual(status, 400)
+        status, error = self.call_api("/api/local-ai/import", {
+            "local_filename": "../secrets.json", "filename": "bad.gguf"})
+        self.assertEqual(status, 400)
+
     def test_huggingface_model_pull_requires_safe_repo_and_uses_ollama_name(self):
         with patch.object(server.Handler, "start_hf_pull", return_value="job-test") as start:
             status, result = self.call_api("/api/models/pull", {"repo": "org/example-GGUF", "quant": "Q4_K_M"})

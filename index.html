@@ -49,6 +49,7 @@
                 <button class="suggestion" data-prompt="ئەمڕۆ چی فێر ببم؟ بابەتێکی سوودبەخش پێشنیار بکە."><span class="suggestion-icon blue">⌖</span><span><strong>شتێکی نوێ فێر ببە</strong><small>بابەتێک بۆ دەستپێکردن هەڵبژێرە</small><b>↖</b></span></button>
               </div>
             </div>
+            <div class="chat-error" id="chatError" role="alert" hidden><span id="chatErrorText"></span><button type="button" id="dismissChatError" aria-label="داخستنی ئاگاداری">×</button></div>
             <div class="messages" id="messages" aria-live="polite"></div>
             <form class="composer" id="chatForm">
               <div class="chat-context-bar">
@@ -91,7 +92,10 @@
           <div class="settings-card local-ai-card">
             <div class="card-heading"><div class="heading-icon hf-heading-icon">HF</div><div><h2>Hugging Face و AI ـی ناوخۆیی</h2><p>مۆدێلی GGUF دابەزێنە و لەسەر خودی تەلەفۆنەکەت inference بکە.</p></div></div>
             <div class="hf-auth-row"><div class="hf-auth-fields"><strong id="hfTokenSaved">بۆ مۆدێلی گشتی login پێویست نییە</strong><small class="field-note">بۆ ڕێپۆی تایبەت یان مۆدێلی gated، لە پەڕەی پەیوەندییەکان بە Hugging Face login بکە؛ access token خۆکارانە بە نهێنی هەڵدەگیرێت.</small></div><div class="hf-auth-actions"><button class="primary-button" id="gotoConnections">چوون بۆ پەیوەندییەکان</button></div></div>
-            <p class="field-note">مۆدێلی پێشنیارکراو هەڵبژێرە یان بگەڕێ؛ لە لیستەکەدا ڕێپۆی GGUF هەڵبژێرە، پاشان فایلی Q4_K_M و داگرتن.</p>
+            <p class="field-note">دەتوانیت GGUF ـێک لە Hugging Face دابەزێنیت، یان فایلێکی GGUF ـی پێشتر لە تەلەفۆن هەڵگیراوت هەناردە بکەیت بۆ ناو ئەپەکە.</p>
+            <label class="field-label" for="importedModelSelect">مۆدێلی GGUF لە تەلەفۆن</label>
+            <div class="hf-search-row"><select id="importedModelSelect"><option value="">هێشتا مۆدێل زیاد نەکراوە</option></select><button class="primary-button" id="importGgufModel">زیادکردنی فایل <span>＋</span></button></div>
+            <div class="hf-search-row"><button class="primary-button" id="useImportedModel" disabled>لۆدکردنی مۆدێلی هەڵبژێردراو <span>↗</span></button><span class="field-note" id="importedModelNote">فایلەکە لە storage ـی تایبەتی ئەپ کۆپی دەکرێت.</span></div>
             <div class="suggestions local-model-presets">
               <button class="suggestion local-model-preset" data-query="Qwen2.5 3B Instruct abliterated GGUF"><span class="suggestion-icon mint">3B</span><span><strong>Qwen 3B · کەم‌سانسۆر</strong><small>گونجاو بۆ مۆبایلی RAM ـی کەم</small></span></button>
               <button class="suggestion local-model-preset" data-query="Dolphin Llama 3.1 8B GGUF"><span class="suggestion-icon blue">8B</span><span><strong>Dolphin Llama 8B</strong><small>کوالێتی باشتر؛ RAM ـی زیاتر دەوێت</small></span></button>
