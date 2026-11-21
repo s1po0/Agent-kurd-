@@ -22,6 +22,8 @@ def start_server(app_files_dir, hf_oauth_client_id=""):
         sys.path.insert(0, str(web_dir))
 
         import server as kurd_server
+        # On Android, local GGUF inference is the default. Cloud providers remain opt-in.
+        kurd_server.DEFAULTS["provider"] = "android-local"
         kurd_server.ROOT = web_dir
         kurd_server.OAUTH_CLIENT_IDS["huggingface"] = hf_oauth_client_id
         _SERVER = ThreadingHTTPServer(("127.0.0.1", 8000), kurd_server.Handler)
