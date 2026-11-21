@@ -33,6 +33,8 @@ OAUTH_CLIENT_IDS = {
 }
 GITHUB_APP_SLUG = os.environ.get("KURD_AGENT_GITHUB_APP_SLUG", "")
 DEFAULTS = {"provider": "ollama", "base_url": "http://127.0.0.1:11434", "model": "", "temperature": 0.7}
+KILO_FREE_BASE_URL = "https://api.kilo.ai/api/gateway"
+KILO_FREE_MODEL = "kilo-auto/free"
 HF_REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,120}")
 AGENT_TOOLS = [
     {"type": "function", "function": {"name": "github_list_repositories", "description": "List the connected user's most recently updated GitHub repositories.", "parameters": {"type": "object", "properties": {}, "required": []}}},
@@ -368,7 +370,7 @@ class Handler(BaseHTTPRequestHandler):
                     models, available, model_error = [], False, str(exc)
                 selected_model = cfg["model"]
             self.send_json(200, {"provider": cfg["provider"], "base_url": cfg["base_url"], "model": selected_model,
-                                 "temperature": cfg.get("temperature", 0.7), "has_api_key": bool(saved_cfg.get("api_key")),
+                                 "temperature": cfg.get("temperature", 0.7), "has_api_key": bool(saved_cfg.get("api_key")) and cfg["provider"] != "kilo-free",
                                  "available": available, "model_error": model_error, "models": models,
                                  "github_connected": github})
             return
@@ -437,6 +439,8 @@ class Handler(BaseHTTPRequestHandler):
         self.serve_static(path)
 
     def get_models(self, cfg):
+        if cfg["provider"] == "kilo-free":
+            return [KILO_FREE_MODEL]
         if cfg["provider"] == "android-local":
             local = read_json(CONFIG_PATH, {}).get("local_model") or {}
             model_path = DATA_DIR / "models" / str(local.get("local_filename", "")) if local.get("local_filename") else None
@@ -639,7 +643,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 base = safe_url(cfg["base_url"])
                 api_base = base if base.endswith("/v1") else base + "/v1"
-                headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg.get("api_key") else {}
+                headers = ({"Authorization": f"Bearer {cfg['api_key']}"}
+                           if cfg.get("api_key") and cfg["provider"] != "kilo-free" else {})
                 body = {"model": cfg["model"], "messages": messages, "temperature": cfg.get("temperature", 0.7)}
                 if tools:
                     body["tools"] = tools
@@ -927,10 +932,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/settings":
                 old = read_json(CONFIG_PATH, {})
                 provider = data.get("provider", "ollama")
-                if provider not in ("ollama", "openai-compatible", "android-local"):
+                if provider not in ("ollama", "openai-compatible", "android-local", "kilo-free"):
                     raise ValueError("Unsupported model provider")
-                cfg = {"provider": provider, "base_url": safe_url(data.get("base_url", DEFAULTS["base_url"])),
-                       "model": str(data.get("model", ""))[:200], "temperature": max(0, min(2, float(data.get("temperature", 0.7))))}
+                if provider == "kilo-free":
+                    base_url, model = KILO_FREE_BASE_URL, KILO_FREE_MODEL
+                else:
+                    base_url = safe_url(data.get("base_url", DEFAULTS["base_url"]))
+                    model = str(data.get("model", ""))[:200]
+                cfg = {"provider": provider, "base_url": base_url,
+                       "model": model, "temperature": max(0, min(2, float(data.get("temperature", 0.7))))}
                 if old.get("local_model"):
                     cfg["local_model"] = old["local_model"]
                 # Empty key means keep the previous one; explicit clear_key removes it.
@@ -940,7 +950,8 @@ class Handler(BaseHTTPRequestHandler):
                 elif old.get("api_key") and not data.get("clear_key"):
                     cfg["api_key"] = old["api_key"]
                 write_json_private(CONFIG_PATH, cfg)
-                self.send_json(200, {"ok": True, "settings": settings(), "has_api_key": bool(cfg.get("api_key"))})
+                self.send_json(200, {"ok": True, "settings": settings(),
+                                     "has_api_key": bool(cfg.get("api_key")) and provider != "kilo-free"})
                 return
             if path == "/api/oauth/device/start":
                 provider = str(data.get("provider", ""))

@@ -31,10 +31,11 @@ function selectedChatContext() {
 }
 function localSystemPrompt(context) {
   const notes = [];
-  if (context.repo) notes.push(`The user's selected GitHub repository is ${context.repo}.`);
-  if (context.branch) notes.push(`The selected Git branch is ${context.branch}.`);
-  if (context.thinking) notes.push('Use extra care and reason internally, but do not reveal private chain-of-thought. Give the conclusion and key steps.');
-  return notes.length ? `${defaultSystem} ${notes.join(' ')}` : defaultSystem;
+  if (context.repo) notes.push(`Selected repository: ${context.repo}.`);
+  if (context.branch) notes.push(`Selected branch: ${context.branch}.`);
+  if (context.thinking) notes.push('Think carefully and give key steps without revealing private reasoning.');
+  const compactOfflineSystem = 'You are Kurd Agent. Be helpful, concise, and accurate. Reply in the user’s language, including natural Sorani Kurdish when appropriate. You are offline and cannot access GitHub or modify files; never claim you did.';
+  return notes.length ? `${compactOfflineSystem} ${notes.join(' ')}` : compactOfflineSystem;
 }
 
 function toast(message, error = false) {
@@ -76,11 +77,11 @@ async function sendPrompt(text) {
     let result;
     if ($('#provider').value === 'android-local') {
       localProgressTimer = setTimeout(() => { if (pending.isConnected) pending.querySelector('.message-body').textContent = 'مۆدێلی ناوخۆیی لەسەر مۆبایل وەڵامەکە دروست دەکات؛ تکایە چاوەڕێ بکە...'; }, 18000);
-      localSlowTimer = setTimeout(() => { if (!localReceivedToken && pending.isConnected) pending.querySelector('.message-body').textContent = 'ئەم مۆدێلە 3B ـە و یەکەم وەڵام لە مۆبایلدا ڕەنگە چەند خولەک بخایەنێت.'; }, 65000);
+      localSlowTimer = setTimeout(() => { if (!localReceivedToken && pending.isConnected) pending.querySelector('.message-body').textContent = 'مۆدێلی ناوخۆیی لەسەر مۆبایل کار دەکات؛ یەکەم وەڵام ڕەنگە چەند خولەک بخایەنێت.'; }, 65000);
       const stateResponse = await fetch('/api/local-ai/status'); const state = await stateResponse.json();
       if (!stateResponse.ok || !state.model_ready) throw new Error('یەکەم جار مۆدێلی GGUF لە ڕێکخستن دابەزێنە.');
       await callLocalAi('loadModel', state.model_path);
-      const localHistory = chatHistory.slice(-5).map(message => ({...message, content:message.content.slice(-500)}));
+      const localHistory = chatHistory.slice(-4).map(message => ({...message, content:message.content.slice(-320)}));
       result = await callLocalAi('chat', JSON.stringify({messages:[{role:'system',content:localSystemPrompt(chatContext)}, ...localHistory], temperature:Number($('#temperature').value)}), {
         onToken(token) {
           localReceivedToken = true; clearTimeout(localProgressTimer); clearTimeout(localSlowTimer);
@@ -105,7 +106,34 @@ document.querySelectorAll('.suggestion').forEach(button => button.addEventListen
 
 document.querySelector('#themeButton').addEventListener('click', () => document.body.classList.toggle('light-mode'));
 $('#temperature').addEventListener('input', () => $('#temperatureValue').textContent = Number($('#temperature').value).toFixed(1));
-$('#provider').addEventListener('change', () => {if ($('#provider').value === 'ollama' && !$('#baseUrl').dataset.touched) $('#baseUrl').value = 'http://127.0.0.1:11434'; else if ($('#provider').value === 'openai-compatible' && !$('#baseUrl').dataset.touched) $('#baseUrl').value = 'http://127.0.0.1:1234/v1';});
+let previousProvider = $('#provider').value;
+function syncProviderControls() {
+  const kilo = $('#provider').value === 'kilo-free';
+  $('#kiloFreeNotice').hidden = !kilo;
+  $('#baseUrl').disabled = kilo;
+  $('#apiKey').disabled = kilo;
+  if (kilo) {
+    $('#baseUrl').value = 'https://api.kilo.ai/api/gateway';
+    populateModels(['kilo-auto/free'], 'kilo-auto/free');
+    $('#apiKey').placeholder = 'Kilo Free کلیل پێویست ناکات';
+    $('#keySaved').hidden = true; $('#clearApiKey').hidden = true;
+  } else {
+    $('#apiKey').placeholder = 'بۆ Ollama پێویست نییە';
+    $('#baseUrl').disabled = false; $('#apiKey').disabled = false;
+  }
+}
+$('#provider').addEventListener('change', () => {
+  const provider = $('#provider').value;
+  if (provider === 'kilo-free') {
+    syncProviderControls();
+  } else if (previousProvider === 'kilo-free' || !$('#baseUrl').dataset.touched) {
+    if (provider === 'ollama') $('#baseUrl').value = 'http://127.0.0.1:11434';
+    else if (provider === 'openai-compatible') $('#baseUrl').value = 'http://127.0.0.1:1234/v1';
+    $('#baseUrl').dataset.touched = '';
+    syncProviderControls();
+  } else syncProviderControls();
+  previousProvider = provider;
+});
 $('#baseUrl').addEventListener('input', () => {$('#baseUrl').dataset.touched='true';});
 async function loadSettings() {
   try {
@@ -115,6 +143,7 @@ async function loadSettings() {
     $('#keySaved').hidden = !data.has_api_key; $('#clearApiKey').hidden = !data.has_api_key;
     $('#apiKey').dataset.clear = 'false';
     populateModels(data.models || [], data.model || '');
+    syncProviderControls();
     await refreshLocalAiStatus();
   } catch { /* status check below will show service state */ }
 }

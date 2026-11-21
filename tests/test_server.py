@@ -76,6 +76,33 @@ class ApiTest(unittest.TestCase):
         self.assertNotIn("api_key", result["settings"])
         self.assertEqual(json.loads(self.config.read_text())["api_key"], "secret-value")
 
+    def test_kilo_free_provider_uses_fixed_no_key_model(self):
+        status, result = self.call_api("/api/settings", {
+            "provider": "kilo-free", "base_url": "https://attacker.example", "model": "attacker-model"})
+        self.assertEqual(status, 200)
+        saved = json.loads(self.config.read_text())
+        self.assertEqual(saved["base_url"], server.KILO_FREE_BASE_URL)
+        self.assertEqual(saved["model"], server.KILO_FREE_MODEL)
+        status, state = self.call_api("/api/status")
+        self.assertEqual(status, 200)
+        self.assertTrue(state["available"])
+        self.assertEqual(state["models"], [server.KILO_FREE_MODEL])
+        self.assertFalse(state["has_api_key"])
+
+    def test_kilo_free_chat_never_sends_a_saved_api_key(self):
+        self.config.write_text(json.dumps({"provider": "kilo-free", "base_url": server.KILO_FREE_BASE_URL,
+            "model": server.KILO_FREE_MODEL, "api_key": "old-provider-secret"}))
+        reply = {"choices": [{"message": {"content": "Free online reply"}}]}
+        with (
+            patch.object(server, "github_app_secret_data", return_value={}),
+            patch.object(server, "request_json", return_value=reply) as request,
+        ):
+            status, result = self.call_api("/api/chat", {"messages": [{"role": "user", "content": "Hi"}]})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["reply"], "Free online reply")
+        self.assertEqual(request.call_args.args[0], server.KILO_FREE_BASE_URL + "/v1/chat/completions")
+        self.assertEqual(request.call_args.kwargs["headers"], {})
+
     def test_huggingface_oauth_client_id_can_be_saved_and_used_for_device_login(self):
         status, result = self.call_api("/api/oauth/huggingface/client-id", {"client_id": "hf-client-public-1234"})
         self.assertEqual(status, 200)

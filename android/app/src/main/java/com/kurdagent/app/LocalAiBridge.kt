@@ -9,6 +9,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import com.thalzeronlabs.llama.ChatMessage
 import com.thalzeronlabs.llama.LlamaModel
+import com.thalzeronlabs.llama.SessionParams
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.runBlocking
@@ -190,8 +191,8 @@ class LocalAiBridge(
                 val answer = StringBuilder()
                 runBlocking {
                     withTimeout(5 * 60 * 1000L) {
-                        activeModel.newSession().use { session ->
-                            session.chat(messages, maxTokens = 128, temperature = temperature).collect { token ->
+                        activeModel.newSession(SessionParams(contextSize = 1024, batchSize = 128, threads = 2)).use { session ->
+                            session.chat(messages, maxTokens = 64, temperature = temperature).collect { token ->
                                 answer.append(token)
                                 emitToken(callbackId, token)
                             }

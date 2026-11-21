@@ -79,9 +79,10 @@
 
       <section class="page" id="settingsPage">
         <div class="settings-wrap">
-          <div class="page-intro"><span class="section-kicker">مۆدێلی خۆت، یاساکانی خۆت</span><h1>ڕێکخستنی مۆدێل</h1><p>سێ هەڵبژاردە: inference ـی ناوخۆیی Android، Ollama، یان خزمەتگوزاریی OpenAI-compatible.</p></div>
+          <div class="page-intro"><span class="section-kicker">مۆدێلی خۆت، یاساکانی خۆت</span><h1>ڕێکخستنی مۆدێل</h1><p>چوار هەڵبژاردە: AI ـی خۆجێیی، Kilo Free online، Ollama، یان خزمەتگوزاریی OpenAI-compatible.</p></div>
           <div class="settings-card"><div class="card-heading"><div class="heading-icon">✳</div><div><h2>سەرچاوەی مۆدێل</h2><p>هەڵبژاردەی بنەڕەتی: Ollama لەسەر ئامێری خۆت</p></div></div>
-            <label class="field-label" for="provider">جۆری سەرچاوە</label><select id="provider"><option value="android-local">Android Local AI · GGUF و بێ ئینتەرنێت</option><option value="ollama">Ollama · سێرڤەری خۆجێیی</option><option value="openai-compatible">OpenAI-compatible · ناوخۆیی یان cloud</option></select>
+            <label class="field-label" for="provider">جۆری سەرچاوە</label><select id="provider"><option value="android-local">Android Local AI · خۆجێیی و بێ quota ـی API</option><option value="kilo-free">Kilo Free · AI ـی online بەخۆڕایی</option><option value="ollama">Ollama · سێرڤەری خۆجێیی</option><option value="openai-compatible">OpenAI-compatible · ناوخۆیی یان cloud</option></select>
+            <small class="field-note" id="kiloFreeNotice" hidden>Kilo مۆدێلی خۆڕایی بێ API key دابین دەکات، بەڵام سنووری بەکارهێنان/availability هەیە (لیستی گشتیی نوێکراوە: نزیکەی ٢٠٠ داواکاری لە کاتژمێرێکدا) و چاتەکەت بە ئینتەرنێت بۆ Kilo و provider ـەکەی دەنێردرێت. ئەمە بێ‌سنوور نییە؛ زانیاریی نهێنی مەنووسە.</small>
             <label class="field-label" for="baseUrl">ناونیشانی API</label><input id="baseUrl" type="url" spellcheck="false" placeholder="http://127.0.0.1:11434">
             <div class="field-label-row"><label class="field-label" for="modelSelect">مۆدێل</label><button class="text-button refresh-models" id="refreshModels">↻ پشکنینی نوێ</button></div>
             <select id="modelSelect"><option value="">سەرەتا پەیوەندییەکە بپشکنە</option></select>
@@ -90,13 +91,15 @@
             <div class="settings-actions"><span class="save-message" id="settingsMessage"></span><button class="primary-button" id="saveSettings">پاشەکەوتکردنی ڕێکخستن <span>↗</span></button></div>
           </div>
           <div class="settings-card local-ai-card">
-            <div class="card-heading"><div class="heading-icon hf-heading-icon">HF</div><div><h2>Hugging Face و AI ـی ناوخۆیی</h2><p>مۆدێلی GGUF دابەزێنە و لەسەر خودی تەلەفۆنەکەت inference بکە.</p></div></div>
+            <div class="card-heading"><div class="heading-icon hf-heading-icon">HF</div><div><h2>AI خۆجێیی بەخۆڕایی و بێ quota ـی API</h2><p>GGUF دابەزێنە یان لە مۆبایل هەناردەی بکە؛ inference لەسەر تەلەفۆنەکەت و بێ ئینتەرنێتە.</p></div></div>
+            <small class="field-note">بۆ کەمکردنەوەی فشار لەسەر مۆبایل، inference بە ٢ thread و context ـی کەمتر کار دەکات و وەڵامی کورتتر دەدات. ئەگەر هێشتا مۆبایل خاو بوو، مۆدێلی Q4 ـی 0.5B یان 1.5B هەڵبژێرە.</small>
             <div class="hf-auth-row"><div class="hf-auth-fields"><strong id="hfTokenSaved">بۆ مۆدێلی گشتی login پێویست نییە</strong><small class="field-note">بۆ ڕێپۆی تایبەت یان مۆدێلی gated، لە پەڕەی پەیوەندییەکان بە Hugging Face login بکە؛ access token خۆکارانە بە نهێنی هەڵدەگیرێت.</small></div><div class="hf-auth-actions"><button class="primary-button" id="gotoConnections">چوون بۆ پەیوەندییەکان</button></div></div>
             <p class="field-note">دەتوانیت GGUF ـێک لە Hugging Face دابەزێنیت، یان فایلێکی GGUF ـی پێشتر لە تەلەفۆن هەڵگیراوت هەناردە بکەیت بۆ ناو ئەپەکە.</p>
             <label class="field-label" for="importedModelSelect">مۆدێلی GGUF لە تەلەفۆن</label>
             <div class="hf-search-row"><select id="importedModelSelect"><option value="">هێشتا مۆدێل زیاد نەکراوە</option></select><button class="primary-button" id="importGgufModel">زیادکردنی فایل <span>＋</span></button></div>
             <div class="hf-search-row"><button class="primary-button" id="useImportedModel" disabled>لۆدکردنی مۆدێلی هەڵبژێردراو <span>↗</span></button><span class="field-note" id="importedModelNote">فایلەکە لە storage ـی تایبەتی ئەپ کۆپی دەکرێت.</span></div>
             <div class="suggestions local-model-presets">
+              <button class="suggestion local-model-preset" data-query="Qwen2.5 0.5B Instruct GGUF"><span class="suggestion-icon mint">0.5B</span><span><strong>Qwen 0.5B · خێراترین</strong><small>بۆ کەمکردنەوەی لاگی مۆبایل پێشنیار دەکرێت</small></span></button>
               <button class="suggestion local-model-preset" data-query="Qwen2.5 3B Instruct abliterated GGUF"><span class="suggestion-icon mint">3B</span><span><strong>Qwen 3B · کەم‌سانسۆر</strong><small>گونجاو بۆ مۆبایلی RAM ـی کەم</small></span></button>
               <button class="suggestion local-model-preset" data-query="Dolphin Llama 3.1 8B GGUF"><span class="suggestion-icon blue">8B</span><span><strong>Dolphin Llama 8B</strong><small>کوالێتی باشتر؛ RAM ـی زیاتر دەوێت</small></span></button>
               <button class="suggestion local-model-preset" data-query="Dolphin Mistral Nemo 12B GGUF"><span class="suggestion-icon amber">12B</span><span><strong>Dolphin Nemo 12B</strong><small>قورسە؛ بۆ مۆبایلی بەهێز</small></span></button>
