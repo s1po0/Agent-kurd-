@@ -35,6 +35,7 @@ OAUTH_CLIENT_IDS = {
 }
 GITHUB_APP_SLUG = os.environ.get("KURD_AGENT_GITHUB_APP_SLUG", "")
 DEFAULTS = {"provider": "ollama", "base_url": "http://127.0.0.1:11434", "model": "", "temperature": 0.7}
+HERMES_DEFAULT_BASE_URL = "http://127.0.0.1:8642/v1"
 KILO_FREE_BASE_URL = "https://api.kilo.ai/api/gateway"
 KILO_FREE_MODEL = "kilo-auto/free"
 HF_REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,120}")
@@ -352,6 +353,17 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json(502, {"error": f"Could not list model files. For gated/private repositories, connect a Hugging Face read token. ({exc})"})
             return
+        if path == "/api/hermes/run":
+            cfg = DEFAULTS | read_json(CONFIG_PATH, {})
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            run_id = (query.get("run_id", [""])[0]).strip()
+            try:
+                self.send_json(200, self.hermes_run_status(cfg, run_id))
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc) or "Invalid Hermes run status request."})
+            except Exception as exc:
+                self.send_json(502, {"error": str(exc) or "Could not read Hermes run status."})
+            return
         if path == "/api/status":
             cfg = settings()
             github_secret = github_app_secret_data()
@@ -374,6 +386,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"provider": cfg["provider"], "base_url": cfg["base_url"], "model": selected_model,
                                  "temperature": cfg.get("temperature", 0.7), "has_api_key": bool(saved_cfg.get("api_key")) and cfg["provider"] != "kilo-free",
                                  "available": available, "model_error": model_error, "models": models,
+                                 "hermes_safety_ack": bool(cfg.get("hermes_safety_ack")),
                                  "github_connected": github})
             return
         if path == "/api/github/state":
@@ -440,7 +453,57 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.serve_static(path)
 
+    def hermes_api_request(self, cfg, endpoint, *, method="GET", data=None, timeout=30, extra_headers=None):
+        if cfg.get("provider") != "hermes-agent":
+            raise ValueError("Hermes Agent backend is not selected.")
+        api_key = str(cfg.get("api_key") or "").strip()
+        if not api_key or len(api_key) > 4096 or "\r" in api_key or "\n" in api_key:
+            raise ValueError("Enter a valid Hermes API Server key in Settings.")
+        base = safe_url(cfg.get("base_url") or HERMES_DEFAULT_BASE_URL)
+        if base.endswith("/v1"):
+            base = base[:-3]
+        headers = {"Authorization": f"Bearer {api_key}"}
+        headers.update(extra_headers or {})
+        try:
+            return request_json(base + endpoint, method=method, data=data, headers=headers, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                raise ValueError("Hermes API authentication failed; check its API_SERVER_KEY and profile URL.") from None
+            raise ValueError(f"Hermes API returned HTTP {exc.code}.") from None
+
+    def hermes_run_status(self, cfg, run_id):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", run_id):
+            raise ValueError("Invalid Hermes run ID.")
+        status = self.hermes_api_request(cfg, "/v1/runs/" + urllib.parse.quote(run_id, safe=""), timeout=20)
+        if not isinstance(status, dict):
+            raise ValueError("Hermes returned an invalid run status.")
+        controls = status.get("pending_controls")
+        safe_controls = []
+        if isinstance(controls, list):
+            for item in controls[:8]:
+                if isinstance(item, dict):
+                    safe_controls.append({
+                        "prompt_id": str(item.get("prompt_id") or "")[:200],
+                        "execution_generation": item.get("execution_generation"),
+                        "tool": str(item.get("tool") or item.get("tool_name") or "")[:120],
+                        "preview": str(item.get("preview") or item.get("description") or item.get("message") or "")[:8000],
+                        "details": json.dumps(item, ensure_ascii=False, default=str)[:12000],
+                    })
+        run_status = str(status.get("status") or "unknown")[:40]
+        if run_status == "waiting_for_approval" and not safe_controls:
+            raise ValueError("Hermes is waiting for approval but returned no reviewable action details.")
+        return {"run_id": run_id, "status": run_status, "output": str(status.get("output") or "")[:40000],
+                "error": str(status.get("error") or "")[:2000],
+                "session_id": str(status.get("session_id") or "")[:200],
+                "pending_controls": safe_controls}
+
     def get_models(self, cfg):
+        if cfg["provider"] == "hermes-agent":
+            safe_cfg = dict(cfg)
+            safe_cfg["api_key"] = read_json(CONFIG_PATH, {}).get("api_key", "")
+            data = self.hermes_api_request(safe_cfg, "/v1/models", timeout=12)
+            return [str(item.get("id")) for item in data.get("data", [])
+                    if isinstance(item, dict) and item.get("id")]
         if cfg["provider"] == "kilo-free":
             return [KILO_FREE_MODEL]
         if cfg["provider"] == "android-local":
@@ -955,23 +1018,31 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/settings":
                 old = read_json(CONFIG_PATH, {})
                 provider = data.get("provider", "ollama")
-                if provider not in ("ollama", "openai-compatible", "android-local", "kilo-free"):
+                if provider not in ("ollama", "openai-compatible", "android-local", "kilo-free", "hermes-agent"):
                     raise ValueError("Unsupported model provider")
                 if provider == "kilo-free":
                     base_url, model = KILO_FREE_BASE_URL, KILO_FREE_MODEL
                 else:
-                    base_url = safe_url(data.get("base_url", DEFAULTS["base_url"]))
+                    default_base = HERMES_DEFAULT_BASE_URL if provider == "hermes-agent" else DEFAULTS["base_url"]
+                    base_url = safe_url(data.get("base_url", default_base))
                     model = str(data.get("model", ""))[:200]
+                    if provider == "hermes-agent" and not model:
+                        model = "hermes-agent"
                 cfg = {"provider": provider, "base_url": base_url,
-                       "model": model, "temperature": max(0, min(2, float(data.get("temperature", 0.7))))}
+                       "model": model, "temperature": max(0, min(2, float(data.get("temperature", 0.7)))),
+                       "hermes_safety_ack": data.get("hermes_safety_ack") is True if provider == "hermes-agent" else False}
                 if old.get("local_model"):
                     cfg["local_model"] = old["local_model"]
-                # Empty key means keep the previous one; explicit clear_key removes it.
+                # Provider credentials never cross provider boundaries.
                 key = str(data.get("api_key", ""))
-                if key:
+                old_key_provider = old.get("api_key_provider", old.get("provider", "ollama"))
+                if provider != "kilo-free" and key:
                     cfg["api_key"] = key
-                elif old.get("api_key") and not data.get("clear_key"):
+                    cfg["api_key_provider"] = provider
+                elif (provider != "kilo-free" and old.get("api_key") and old_key_provider == provider
+                      and not data.get("clear_key")):
                     cfg["api_key"] = old["api_key"]
+                    cfg["api_key_provider"] = provider
                 write_json_private(CONFIG_PATH, cfg)
                 self.send_json(200, {"ok": True, "settings": settings(),
                                      "has_api_key": bool(cfg.get("api_key")) and provider != "kilo-free"})
@@ -988,6 +1059,57 @@ class Handler(BaseHTTPRequestHandler):
                 if provider not in ("github", "huggingface") or not job_id:
                     raise ValueError("Invalid sign-in session.")
                 self.send_json(200, self.poll_device_oauth(provider, job_id))
+                return
+            if path == "/api/hermes/run":
+                cfg = DEFAULTS | read_json(CONFIG_PATH, {})
+                prompt = str(data.get("prompt", "")).strip()
+                instructions = str(data.get("instructions", ""))[:8000]
+                session_id = str(data.get("session_id", "")).strip()
+                if cfg.get("provider") != "hermes-agent":
+                    raise ValueError("Select Hermes Agent in Settings first.")
+                if not cfg.get("hermes_safety_ack") or data.get("safety_ack") is not True:
+                    raise ValueError("Confirm in Settings and for this task that a no-cost model provider, Hermes approvals, and a sandboxed runner are configured.")
+                capabilities = self.hermes_api_request(cfg, "/v1/capabilities", timeout=12)
+                features = capabilities.get("features", {}) if isinstance(capabilities, dict) else {}
+                if not features.get("run_approval"):
+                    raise ValueError("This Hermes API Server does not advertise Runs API approvals; configure a supported Hermes runtime first.")
+                if not prompt or len(prompt) > 20000:
+                    raise ValueError("Enter a task of 1 to 20,000 characters.")
+                if session_id and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", session_id):
+                    raise ValueError("Invalid Hermes session ID.")
+                run_data = {"input": prompt, "instructions": instructions or "You are Kurd Agent. Help safely and honestly."}
+                if session_id:
+                    run_data["session_id"] = session_id
+                if cfg.get("model"):
+                    run_data["model"] = cfg["model"]
+                result = self.hermes_api_request(cfg, "/v1/runs", method="POST", data=run_data, timeout=30,
+                                                 extra_headers={"Idempotency-Key": secrets.token_urlsafe(24)})
+                run_id = str(result.get("run_id") or "")
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", run_id):
+                    raise ValueError("Hermes did not return a valid run ID.")
+                self.send_json(200, {"run_id": run_id,
+                                     "session_id": str(result.get("session_id") or session_id)[:200],
+                                     "status": str(result.get("status") or "started")})
+                return
+            if path == "/api/hermes/approval":
+                cfg = DEFAULTS | read_json(CONFIG_PATH, {})
+                run_id = str(data.get("run_id", "")).strip()
+                prompt_id = str(data.get("request_id", "")).strip()
+                generation = data.get("execution_generation")
+                choice = str(data.get("choice", ""))
+                if choice not in ("once", "deny") or not prompt_id or not isinstance(generation, int):
+                    raise ValueError("Invalid Hermes approval decision.")
+                current = self.hermes_run_status(cfg, run_id)
+                pending = next((item for item in current["pending_controls"]
+                                if item["prompt_id"] == prompt_id
+                                and item["execution_generation"] == generation), None)
+                if not pending or current["status"] != "waiting_for_approval":
+                    raise ValueError("This Hermes approval is no longer pending.")
+                result = self.hermes_api_request(
+                    cfg, "/v1/runs/" + urllib.parse.quote(run_id, safe="") + "/approval",
+                    method="POST", data={"request_id": prompt_id,
+                                          "execution_generation": generation, "choice": choice}, timeout=20)
+                self.send_json(200, {"ok": True, "choice": choice, "result": result})
                 return
             if path == "/api/agent/approve":
                 approval_id = str(data.get("approval_id", ""))

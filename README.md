@@ -45,6 +45,12 @@ HOST=127.0.0.1 python3 server.py
 
 لە **ڕێکخستن → جۆری سەرچاوە**، `Kilo Free` هەڵبژێرە بۆ چاتی online ـی خۆڕایی، بەبێ API key. Endpoint ـەکە `kilo-auto/free` بەکاردهێنێت؛ repo ـی [open-free-llm-api](https://github.com/open-free-llm-api/awesome-freellm-apis) سنووری نزیکەی ٢٠٠ داواکاری/کاتژمێر بۆ Kilo تۆمار کردووە. ئەمە **بێ‌سنوور نییە** و provider دەتوانێت سنوورەکان بگۆڕێت یان داواکارییەکان ڕەت بکات. ئەم شێوازە ئینتەرنێت دەوێت و پەیامەکانت بۆ Kilo و مۆدێلی سەرچاوە دەنێردرێن؛ زانیاریی هەستیار مەنووسە. بۆ inference ـی تەواو offline و بێ quota، `Android Local AI` و GGUF بەکاربهێنە؛ ئەوەش خێرایییەکەی بە CPU و RAM ـی مۆبایلەوە بەستراوە.
 
+## Hermes Agent و provider ـی خۆڕایی
+
+لە **ڕێکخستن**، `Hermes Agent` هەڵبژێرە بۆ پەیوەندی بە Hermes API Server ـێکی خۆت (`http://127.0.0.1:8642/v1` بە بنەڕەتی). API_SERVER_KEY کلیلێکی local authentication ـە، نەک پارەدان بۆ مۆدێل. لە Hermes host ـدا model provider ـێکی free ڕێکبخە و quota ـەکانی بپشکنە؛ Kilo Free لە Kurd Agent بەبێ API key کار دەکات، بەڵام بۆ Hermes تەنها ئەگەر runtime ـەکەت و provider config ـەکەت لێی پشتیوانی بکات بەکاریبهێنە.
+
+Hermes Runs API ـەکە بەکاردهێنرێت، و داواکارییە pending ـەکانی approval لە ناو ئەپەکە پیشان دەدرێن. پێش بەکارهێنان، backend ـی Hermes بە approval policy و terminal sandbox ڕێکبخە؛ ئەپەکە API capability ـی approval پشکنین دەکات و بەبێ checkbox ـی safety run ڕاناکات. ئەمە Hermes runtime لە APK ـدا ناگرێتەوە؛ backend دەبێت لە Termux یان hostێکی تر ڕابکەوێت. دۆکیومێنتی upstream ـی Termux ئێستا ئاگاداریی کێشەی پەکەج دەدات، بۆیە پێش بەکارهێنان health ـی runtime بپشکنە.
+
 ## داتا و نهێنی
 
 - Python backend لەسەر ئامێری خۆت دەچێت؛ پەیامەکان بۆ مۆدێلی local نانێردرێنە دەرەوە.

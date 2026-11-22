@@ -25,6 +25,12 @@ Downloading model weights requires internet and sufficient free storage. Once a 
 
 The existing Ollama and OpenAI-compatible provider choices remain available; Ollama's Hugging Face import flow is separate from Android Local AI.
 
+## Use a free Hermes Agent backend
+
+Kurd Agent can connect to a separately running Hermes API Server at `http://127.0.0.1:8642/v1` by default. Configure Hermes with a no-cost model provider first; Kilo Free in Kurd Agent itself is keyless but rate-limited, and Hermes may need its own supported provider configuration. The `API_SERVER_KEY` is a local authentication secret for your own Hermes service, not a paid model API key. Keep it private.
+
+Hermes mode uses the Runs API and brings pending approval prompts into Kurd Agent. It requires the server to advertise `run_approval`; the user must also confirm a free provider, approval policy, and sandboxed terminal in Settings and per task. Hermes runtime is not included in this APK. Use a separate verified Hermes host; upstream's Termux guide currently warns that the Android package is broken. Never expose an unauthenticated Hermes API Server publicly.
+
 ## Upgrade-safe signing
 
 For Android to install future APKs over an existing installation, each build must use the same signing keystore and a higher version code. The workflow supports a persistent PKCS#12 keystore through these **repository Actions secrets**: `KURD_AGENT_KEYSTORE_BASE64`, `KURD_AGENT_KEYSTORE_PASSWORD`, and `KURD_AGENT_KEY_ALIAS`. Without them, GitHub's temporary debug key is used, so the APK will not be upgrade-compatible between CI runs. Never commit the private keystore or its password to this repository. Keep a secure backup of the signing key: losing it means users must uninstall before switching keys. After adding the three secrets, any Android-source push triggers a new signed build and updates the downloadable release.

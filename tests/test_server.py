@@ -76,6 +76,74 @@ class ApiTest(unittest.TestCase):
         self.assertNotIn("api_key", result["settings"])
         self.assertEqual(json.loads(self.config.read_text())["api_key"], "secret-value")
 
+    def test_hermes_settings_keeps_api_key_private_and_provider_scoped(self):
+        status, result = self.call_api("/api/settings", {
+            "provider": "hermes-agent", "base_url": "http://127.0.0.1:8642/v1", "model": "",
+            "api_key": "local-hermes-key", "hermes_safety_ack": True})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["settings"]["model"], "hermes-agent")
+        self.assertTrue(result["settings"]["hermes_safety_ack"])
+        self.assertNotIn("api_key", result["settings"])
+        self.assertEqual(json.loads(self.config.read_text())["api_key_provider"], "hermes-agent")
+        status, result = self.call_api("/api/settings", {
+            "provider": "openai-compatible", "base_url": "https://example.test/v1", "model": "m"})
+        self.assertEqual(status, 200)
+        self.assertFalse(result["has_api_key"])
+        self.assertNotIn("api_key", json.loads(self.config.read_text()))
+
+    def test_hermes_model_discovery_sends_private_key_only_to_configured_host(self):
+        self.config.write_text(json.dumps({"provider": "hermes-agent", "base_url": "https://hermes.example/v1",
+            "model": "hermes-agent", "api_key": "local-secret"}))
+        with patch.object(server, "request_json", return_value={"data": [{"id": "hermes-agent"}]}) as request:
+            models = server.Handler.get_models(server.Handler.__new__(server.Handler), server.settings())
+        self.assertEqual(models, ["hermes-agent"])
+        self.assertEqual(request.call_args.args[0], "https://hermes.example/v1/models")
+        self.assertEqual(request.call_args.kwargs["headers"]["Authorization"], "Bearer local-secret")
+        self.assertNotIn("api_key", server.settings())
+
+    def test_hermes_run_requires_capability_and_explicit_free_safety_ack(self):
+        self.config.write_text(json.dumps({"provider": "hermes-agent", "base_url": "http://127.0.0.1:8642/v1",
+            "model": "hermes-agent", "api_key": "local-key", "hermes_safety_ack": True}))
+        with patch.object(server.Handler, "hermes_api_request", side_effect=[
+            {"features": {"run_approval": True}},
+            {"run_id": "run_42", "session_id": "session_1", "status": "started"},
+        ]) as request:
+            status, result = self.call_api("/api/hermes/run", {
+                "prompt": "Summarize the selected repository", "instructions": "Use safe tools.", "safety_ack": True})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["run_id"], "run_42")
+        self.assertEqual(request.call_args_list[0].args[1], "/v1/capabilities")
+        self.assertEqual(request.call_args_list[1].args[1], "/v1/runs")
+        self.assertTrue(request.call_args_list[1].kwargs["extra_headers"]["Idempotency-Key"])
+
+    def test_hermes_run_does_not_start_without_local_ack_or_approval_support(self):
+        self.config.write_text(json.dumps({"provider": "hermes-agent", "base_url": "http://127.0.0.1:8642/v1",
+            "model": "hermes-agent", "api_key": "local-key"}))
+        with patch.object(server.Handler, "hermes_api_request") as request:
+            status, result = self.call_api("/api/hermes/run", {"prompt": "Run tests", "safety_ack": True})
+        self.assertEqual(status, 400)
+        self.assertFalse(request.called)
+        self.config.write_text(json.dumps({"provider": "hermes-agent", "base_url": "http://127.0.0.1:8642/v1",
+            "model": "hermes-agent", "api_key": "local-key", "hermes_safety_ack": True}))
+        with patch.object(server.Handler, "hermes_api_request", return_value={"features": {"run_approval": False}}) as request:
+            status, result = self.call_api("/api/hermes/run", {"prompt": "Run tests", "safety_ack": True})
+        self.assertEqual(status, 400)
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(request.call_args.args[1], "/v1/capabilities")
+
+    def test_hermes_approval_revalidates_pending_control(self):
+        self.config.write_text(json.dumps({"provider": "hermes-agent", "base_url": "http://127.0.0.1:8642/v1",
+            "model": "hermes-agent", "api_key": "local-key"}))
+        control = {"prompt_id": "p1", "execution_generation": 2, "tool": "terminal", "details": "git status"}
+        with (patch.object(server.Handler, "hermes_run_status", return_value={
+                    "status": "waiting_for_approval", "pending_controls": [control]}),
+              patch.object(server.Handler, "hermes_api_request", return_value={"ok": True}) as request):
+            status, result = self.call_api("/api/hermes/approval", {"run_id": "run_42", "request_id": "p1",
+                "execution_generation": 2, "choice": "once"})
+        self.assertEqual(status, 200)
+        self.assertEqual(request.call_args.kwargs["data"], {
+            "request_id": "p1", "execution_generation": 2, "choice": "once"})
+
     def test_kilo_free_provider_uses_fixed_no_key_model(self):
         status, result = self.call_api("/api/settings", {
             "provider": "kilo-free", "base_url": "https://attacker.example", "model": "attacker-model"})
