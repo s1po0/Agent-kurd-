@@ -1,0 +1,83 @@
+name: IG Monitor - sipoo.x
+
+on:
+  push:
+    paths:
+      - '.github/workflows/ig-monitor.yml'
+  workflow_dispatch:
+  schedule:
+    # every 15 minutes (schedule runs only from the default branch)
+    - cron: '*/15 * * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore last state
+        uses: actions/cache@v4
+        with:
+          path: state.json
+          key: ig-state-${{ github.run_id }}
+          restore-keys: |
+            ig-state-
+
+      - name: Check instagram.com/sipoo.x
+        id: check
+        run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+          CODE=$(curl -s -o page.html -w "%{http_code}" -A "$UA" --max-time 30 "https://www.instagram.com/sipoo.x/" || echo 000)
+          echo "HTTP code: $CODE"
+          NEW="MISSING"
+          if [ "$CODE" = "200" ] && grep -qi "followers" page.html; then
+            NEW="ACTIVE"
+          fi
+          OLD="UNKNOWN"
+          if [ -f state.json ]; then
+            OLD=$(python3 -c "import json;print(json.load(open('state.json')).get('state','UNKNOWN'))")
+          fi
+          echo "OLD=$OLD NEW=$NEW"
+          CHANGED=no
+          if [ "$OLD" != "$NEW" ]; then CHANGED=yes; fi
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          echo "old=$OLD" >> "$GITHUB_OUTPUT"
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "{\"state\":\"$NEW\"}" > state.json
+
+      - name: Notify Telegram
+        if: steps.check.outputs.changed == 'yes' || github.event_name == 'workflow_dispatch'
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::TELEGRAM_BOT_TOKEN secret is not set"
+            exit 0
+          fi
+          # discover the chat that talked to the bot (send /start to the bot first!)
+          CHAT=$(curl -s --max-time 20 "https://api.telegram.org/bot${TOKEN}/getUpdates?offset=-1" \
+            | python3 -c "
+          import json,sys
+          try:
+              d=json.load(sys.stdin)
+              chats=[u['message']['chat']['id'] for u in d.get('result',[]) if u.get('message')]
+              print(chats[-1] if chats else '')
+          except Exception:
+              print('')
+          ")
+          if [ -z "$CHAT" ]; then
+            echo "::warning::No Telegram chat found yet. Open your bot in Telegram and send /start, then run this workflow again."
+            exit 0
+          fi
+          NEW="${{ steps.check.outputs.new }}"
+          OLD="${{ steps.check.outputs.old }}"
+          if [ "$NEW" = "ACTIVE" ]; then
+            TEXT="sipoo.x IS BACK! 🎉 The Instagram account is visible again (was: $OLD). Try logging in now!"
+          else
+            TEXT="sipoo.x status changed: $OLD -> $NEW. Still not visible. (run ${{ github.run_number }})"
+          fi
+          curl -s --max-time 20 -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+            -d chat_id="$CHAT" \
+            --data-urlencode text="$TEXT" > /dev/null
+          echo "Telegram notification sent to chat $CHAT"
